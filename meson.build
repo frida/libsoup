@@ -240,7 +240,9 @@ cdata.set_quoted('GETTEXT_PACKAGE', libsoup_api_name)
 configure_file(output : 'config.h', configuration : cdata)
 
 subdir('libsoup')
-subdir('po')
+if find_program('xgettext', required : false).found()
+  subdir('po')
+endif
 subdir('examples')
 
 if get_option('tests')
