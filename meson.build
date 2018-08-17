@@ -24,6 +24,15 @@ common_flags = [
   '-DHAVE_CONFIG_H',
 ]
 
+buildtype = get_option('buildtype')
+if buildtype == 'release' or buildtype == 'minsize'
+  common_flags += [
+    '-DG_DISABLE_CAST_CHECKS',
+    '-DG_DISABLE_ASSERT',
+    '-DG_DISABLE_CHECKS',
+  ]
+endif
+
 # Enable extra warnings if compiler supports them.
 if cc.get_id() == 'msvc'
   common_flags += ['/FImsvc_recommended_pragmas.h']
