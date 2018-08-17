@@ -49,6 +49,15 @@ common_flags = [
   '-DHAVE_CONFIG_H',
 ]
 
+ndebug = get_option('b_ndebug')
+if ndebug == 'true' or (ndebug == 'if-release' and not get_option('debug'))
+  common_flags += [
+    '-DG_DISABLE_CAST_CHECKS',
+    '-DG_DISABLE_ASSERT',
+    '-DG_DISABLE_CHECKS',
+  ]
+endif
+
 cc = meson.get_compiler('c')
 
 # define ssize_t as Microsoft's headers do not define it
