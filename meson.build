@@ -2,7 +2,7 @@ project('libsoup', 'c',
         version: '2.66.0',
         meson_version : '>=0.48',
         license : 'LGPL2',
-        default_options : 'c_std=c89')
+        default_options : 'c_std=gnu89')
 
 gnome = import('gnome')
 
