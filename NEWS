@@ -1,3 +1,86 @@
+Changes in libsoup from 2.65.92 to 2.66.0:
+
+        * Fix lookup for libxml2 on Visual Studio builds [Chun-wei Fan]
+
+Changes in libsoup from 2.65.91 to 2.65.92:
+
+        * SoupConnection: Fix check for remote disconnectin idle state
+          [Michael Catanzaro, #134]
+
+        * Code cleanups and warnings fixed [Michael Catanzaro]
+
+        * Remove stale .pc.in files [Claudio Saavedra, #137]
+
+        * Updated translations: Dutch
+
+Changes in libsoup from 2.65.90 to 2.65.91:
+
+	* Remove RFCs from sources [Tomas Popela, #133]
+
+Changes in libsoup from 2.65.2 to 2.65.90:
+
+        * Avoid using threads in SoupRequestFile asynchronous API
+          [Ignacio Casal Quinteiro]
+
+Changes in libsoup from 2.65.1 to 2.65.2:
+
+	* Remove autotools build system and change to meson by default
+          [#12, Tomas Popela]
+
+	* Many fixes to Meson [Claudio Saavedra, Tomas Popela, Xavier
+          Claessens]
+
+	* Improvements to the continuous integration infrastructure
+          [Xavier Claessens]
+
+	* Make sure SoupSession features are not disposed until all
+          pending messages are processed [#130, Claudio Saavedra]
+
+	* Updated translations: Greek, Slovak, French.
+
+Changes in libsoup from 2.64.0 to 2.65.1:
+
+	* Added MTLMv2 responses support [Michal Hrubý]
+	* Many fixes to the meson build system [Tomas Popela]
+	* Remove Visual Studio project files [Chun-wei Fan]
+	* Enable VAPI by default [#119, Jeremy Bicha]
+	* New strict header field parameter parsing API [Claudio Saavedra]
+	* Code cleanups [Claudio Saavedra]
+	* Updated translations: Belarusian, Serbian
+
+Changes in libsoup from 2.63.92 to 2.64.0:
+
+	* Many fixes to the meson build system [#7, #8, #9, #11, Tomas Popela]
+	* Updated translations: Brazilian Portuguese, Galician,
+          Hungarian, Latvian, Danish.
+
+Changes in libsoup from 2.63.91 to 2.63.92:
+
+	* Make sure that XMLRPC tests build in Debian too [Claudio Saavedra]
+	* Distribute missing meson files [Claudio Saavedra]
+	* Some fixes to the meson build files [Claudio Saavedra]
+	* Updated Korean and Swedish translations
+
+Changes in libsoup from 2.63.90 to 2.63.91:
+
+	* Simplify soup_hosts_matches_host() [Claudio Saavedra]
+	* Add new tests for trailing dots in domain names [Claudio Saavedra]
+	* Updated Turkish translation
+
+Changes in libsoup from 2.63.2 to 2.63.90:
+
+	* Set default cookie path for NULL origins [#1, Adrian Perez de Castro]
+	* Fixes to GObject-introspection [bgo#794787, Corentin Noël]
+	* Use atomic-refcounting in classes that are not using GObject-refcounting
+	  [bgo#785110, Edward Hervey]
+	* Many Coverity-found code fixes [bgo#781771, Milan Crha]
+	* Bail out on cookie-jar calls with empty hostnames [#3, Michael Catanzaro]
+	* Fixes to the simple-httpd example [#2, Mooffie]
+	* Updated translations: Chinese (Taiwan), Catalan
+
+	Note: from now onwards bgo# references bugs in GNOME Bugzilla
+	and # issues in GNOME gitlab.
+
 Changes in libsoup from 2.63.1 to 2.63.2:
 
 	* Many fixes to the meson build system support [#795324,

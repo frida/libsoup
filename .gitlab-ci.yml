@@ -1,0 +1,18 @@
+image: registry.gitlab.gnome.org/gnome/libsoup/master:v1
+
+.build:
+  tags:
+    # We need runners supporting IPv6:
+    # https://gitlab.gnome.org/Infrastructure/GitLab/issues/313
+    - osuosl
+
+fedora-meson-x86_64:
+  extends: .build
+  script:
+    - meson _build
+    - ninja -C _build
+    - ninja -C _build test
+  artifacts:
+    paths:
+      - "_build/meson-logs"
+    when: on_failure

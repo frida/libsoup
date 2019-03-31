@@ -22,6 +22,9 @@ static struct {
 	{ ".example", NULL, SOUP_TLD_ERROR_INVALID_HOSTNAME },
 	{ ".example.com", NULL, SOUP_TLD_ERROR_INVALID_HOSTNAME },
 	{ ".example.example", NULL, SOUP_TLD_ERROR_INVALID_HOSTNAME },
+	/* Trailing dot. */
+	{ ".com.", NULL, SOUP_TLD_ERROR_INVALID_HOSTNAME },
+	{ "domain.biz.", "domain.biz.", -1 },
 	/* TLD with only 1 rule. */
 	{ "biz", NULL, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS },
 	{ "domain.biz", "domain.biz", -1 },
@@ -38,10 +41,10 @@ static struct {
 	{ "a.b.example.uk.com", "example.uk.com", -1 },
 	{ "test.ac", "test.ac", -1 },
 	/* TLD with only 1 (wildcard) rule. */
-	{ "bn", NULL, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS },
-	{ "c.bn", NULL, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS },
-	{ "b.c.bn", "b.c.bn", -1 },
-	{ "a.b.c.bn", "b.c.bn", -1 },
+	{ "bd", NULL, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS },
+	{ "c.bd", NULL, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS },
+	{ "b.c.bd", "b.c.bd", -1 },
+	{ "a.b.c.bd", "b.c.bd", -1 },
 	/* More complex TLD. */
 	{ "jp", NULL, SOUP_TLD_ERROR_NOT_ENOUGH_DOMAINS },
 	{ "test.jp", "test.jp", -1 },
