@@ -1,8 +1,8 @@
 project('libsoup', 'c',
-        version: '2.66.0',
-        meson_version : '>=0.48',
+        version: '2.70.0',
+        meson_version : '>=0.50',
         license : 'LGPL2',
-        default_options : 'c_std=gnu89')
+        default_options : 'c_std=c89')
 
 gnome = import('gnome')
 
@@ -12,9 +12,17 @@ soup_version_major = version_arr[0]
 soup_version_minor = version_arr[1]
 soup_version_micro = version_arr[2]
 
-libversion = '1.8.0'
+# Before making a release, the libversion string should be modified.
+#
+#  * Bump the first component if binary compatibility has been broken; or
+#  * Bump the second component if new APIs are added; or
+#  * Bump the third component otherwise.
+#
+# When bumping the first component version, set the second and third components
+# to 0. When bumping the second version, set the third one to zero.
+libversion = '1.9.0'
 apiversion = '2.4'
-soversion = '1'
+soversion = libversion.split('.')[0]
 libsoup_api_name = '@0@-@1@'.format(meson.project_name(), apiversion)
 libversion_arr = libversion.split('.')
 darwin_version_major = libversion_arr[0].to_int()
@@ -31,23 +39,22 @@ default_source_flag = [
 
 add_project_arguments(default_source_flag, language: 'c')
 
+if host_system == 'sunos'
+      add_project_arguments('-D__EXTENSIONS__', language: 'c')
+      add_project_link_arguments('-lsocket', language: 'c')
+endif
+
 common_flags = [
   '-DHAVE_CONFIG_H',
 ]
-
-buildtype = get_option('buildtype')
-if buildtype == 'release' or buildtype == 'minsize'
-  common_flags += [
-    '-DG_DISABLE_CAST_CHECKS',
-    '-DG_DISABLE_ASSERT',
-    '-DG_DISABLE_CHECKS',
-  ]
-endif
 
 cc = meson.get_compiler('c')
 # Enable extra warnings if compiler supports them.
 if cc.get_id() == 'msvc'
   common_flags += ['/FImsvc_recommended_pragmas.h']
+
+  # set the input encoding to utf-8
+  add_project_arguments(cc.get_supported_arguments(['/utf-8']), language: 'c')
 else
   test_cflags = [
       '-Wall',
@@ -73,21 +80,27 @@ endif
 
 add_project_arguments(common_flags, language : 'c')
 
-glib_required_version = '>= 2.38'
-glib_dep = [dependency('glib-2.0', version : glib_required_version,
-                       fallback: ['glib', 'libglib_dep']),
-            dependency('gobject-2.0', version : glib_required_version,
-                       fallback: ['glib', 'libgobject_dep']),
-            dependency('gio-2.0', version : glib_required_version,
-                       fallback: ['glib', 'libgio_dep'])]
+glib_required_version = '>= 2.58'
+glib_dep = dependency('glib-2.0', version : glib_required_version,
+                       fallback: ['glib', 'libglib_dep'])
+gobject_dep = dependency('gobject-2.0', version : glib_required_version,
+                       fallback: ['glib', 'libgobject_dep'])
+gio_dep = dependency('gio-2.0', version : glib_required_version,
+                       fallback: ['glib', 'libgio_dep'])
+
+glib_deps = [glib_dep, gobject_dep, gio_dep]
 
 sqlite_dep = dependency('sqlite3', required: false)
 
 # Fallback check for sqlite, not all platforms ship pkg-config file
 if not sqlite_dep.found()
-  cc.has_header('sqlite3.h')
-  cc.has_header('sqlite3ext.h')
-  sqlite_dep = cc.find_library('sqlite3')
+  sqlite_dep = cc.find_library('sqlite3',
+    has_headers : ['sqlite3.h', 'sqlite3ext.h'],
+    required: false)
+endif
+
+if not sqlite_dep.found()
+  sqlite_dep = subproject('sqlite').get_variable('sqlite_dep')
 endif
 
 libxml_dep = dependency('libxml-2.0', required: false)
@@ -96,12 +109,22 @@ libxml_dep = dependency('libxml-2.0', required: false)
 if not libxml_dep.found()
   # Note: The XML include dir needs to be within the INCLUDE envvar,
   # such as <INCLUDEDIR>\libxml2
-  cc.has_header('libxml/tree.h')
   libxml2_libname = cc.get_id() == 'msvc' ? 'libxml2' : 'xml2'
-  libxml_dep = cc.find_library(libxml2_libname)
+  libxml_dep = cc.find_library(libxml2_libname,
+    has_headers : 'libxml/tree.h',
+    required: false)
+endif
+
+if not libxml_dep.found()
+  libxml_dep = subproject('libxml2').get_variable('xml2lib_dep')
 endif
 
 cdata = configuration_data()
+
+brotlidec_dep = dependency('libbrotlidec', required : get_option('brotli'))
+if brotlidec_dep.found()
+  cdata.set('WITH_BROTLI', true)
+endif
 
 platform_deps = []
 hidden_visibility_flag = []
@@ -133,14 +156,33 @@ endif
 ###################
 enable_tls_check = get_option('tls_check')
 if enable_tls_check
-  check_gio_tls_src = '''#include <gio/gio.h>
-  int main(void) {
-    return !g_tls_backend_supports_tls (g_tls_backend_get_default ());
-  }
-  '''
+  if gio_dep.type_name() == 'internal'
+    warning('TLS check was enabled but required dependency is internal')
+  else
+    check_gio_tls_src = '''#include <gio/gio.h>
+    int main(void) {
+      return !g_tls_backend_supports_tls (g_tls_backend_get_default ());
+    }
+    '''
 
-  assert(cc.compiles(check_gio_tls_src, name : 'GIO has real TLS support', dependencies : glib_dep),
-         'libsoup requires glib-networking or glib-openssl for TLS support')
+    rres = cc.run(check_gio_tls_src, name : 'GIO has real TLS support', dependencies : glib_deps)
+    assert(rres.compiled() and rres.returncode() == 0, 'libsoup requires glib-networking for TLS support')
+  endif
+endif
+
+libz_dep = dependency('zlib', required : false)
+if not libz_dep.found()
+  if cc.get_id() != 'msvc'
+    libz_dep = cc.find_library('z', required : false)
+  else
+    libz_dep = cc.find_library('zlib1', required : false)
+    if not libz_dep.found()
+      libz_dep = cc.find_library('zlib', required : false)
+    endif
+  endif
+  if not libz_dep.found() or not cc.has_header('zlib.h')
+    libz_dep = subproject('zlib').get_variable('zlib_dep')
+  endif
 endif
 
 #################################
@@ -170,6 +212,11 @@ have_apache=false
 apache_httpd2_version = ''
 if apache_httpd2.found() and apachectl.found()
   apache_httpd2_version_raw = run_command(apachectl.path(), '-v')
+  # It seems that from version 2.4.39 apachectl doesn't take arguments, fallback
+  # to calling apache directly just in case.
+  if apache_httpd2_version_raw.returncode() != 0
+    apache_httpd2_version_raw = run_command(apache_httpd2.path(), '-v')
+  endif
   if apache_httpd2_version_raw.returncode() == 0
     apache_httpd2_version = apache_httpd2_version_raw.stdout().split('\n')[0]
     apache_httpd2_version = apache_httpd2_version.split('/')[1].split(' ')[0]
@@ -185,14 +232,26 @@ endif
 if have_apache
   apache_modules_dirs_out = run_command('get_apache_modules_dirs.py', apachectl.path())
   have_apache = (apache_modules_dirs_out.returncode() == 0)
+  # Same as above, using apachectl might fail, try apache directly.
+  if not have_apache
+    apache_modules_dirs_out = run_command('get_apache_modules_dirs.py', apache_httpd2.path())
+    have_apache = (apache_modules_dirs_out.returncode() == 0)
+  endif
   if have_apache
     apache_modules_dirs = apache_modules_dirs_out.stdout().split(':')
     message('Apache modules directory: ' + apache_modules_dirs[0])
     cdata.set('APACHE_MODULE_DIR', apache_modules_dirs[0])
+    message('Apache SSL module directory: ' + apache_modules_dirs[1])
     cdata.set('APACHE_SSL_MODULE_DIR', apache_modules_dirs[1])
+    message('Apache PHP module file: ' + apache_modules_dirs[2])
     cdata.set('APACHE_PHP_MODULE_FILE', apache_modules_dirs[2])
+    message('Apache mod_unixd module directory: ' + (apache_modules_dirs[3] != '' ? apache_modules_dirs[3] : '(none)'))
     cdata.set('IF_HAVE_MOD_UNIXD', apache_modules_dirs[3] != '' ? '' : '#')
     cdata.set('HAVE_APACHE', have_apache)
+  else
+    message('Failed to locate necessary Apache modules for full test coverage')
+    message('stdout: ' + apache_modules_dirs_out.stdout())
+    message('stderr: ' + apache_modules_dirs_out.stderr())
   endif
 endif
 
@@ -226,39 +285,40 @@ cdata.set('HAVE_CURL', find_program('curl', required : false).found())
 ##################
 # GSSAPI support #
 ##################
-enable_gssapi = get_option('gssapi')
-if enable_gssapi
-  if cc.get_id() == 'msvc'
-    if host_machine.cpu_family() == 'x86'
-      gssapi_lib_type = '32'
-    else
-      gssapi_lib_type = '64'
-    endif
-    if cc.has_header('gssapi/gssapi.h', required: false)
-      gssapi_lib = cc.find_library('gssapi' + gssapi_lib_type, required: false)
-      assert(gssapi_lib.found(), 'GSSAPI support requested, but the MIT Kerberos 5 headers and libraries are not found')
-      add_project_link_arguments('gssapi@0@.lib'.format(gssapi_lib_type), language : 'c')
-    endif
+gssapi_opt = get_option('gssapi')
+enable_gssapi = false
+if cc.get_id() == 'msvc'
+  if host_machine.cpu_family() == 'x86'
+    gssapi_lib_type = '32'
   else
-    krb5_config_option = get_option('krb5_config')
-
-    krb5_config_path = krb5_config_option != '' ? krb5_config_option : 'krb5-config'
-    krb5_config = find_program(krb5_config_path, required : false)
-
-    assert(krb5_config.found(), 'GSSAPI support requested, but krb5-config not found. Please specify its path with -Dkrb5-config=PATH')
-
-    krb5_config_output = run_command (krb5_config, '--libs', 'gssapi')
-    assert(krb5_config_output.returncode() == 0, 'Failed to obtain cflags for GSSAPI from krb5-config')
-    add_project_link_arguments(krb5_config_output.stdout().split(), language : 'c')
-
-    krb5_config_output = run_command (krb5_config, '--cflags', 'gssapi')
-    assert(krb5_config_output.returncode() == 0, 'Failed to obtain cflags for GSSAPI from krb5-config')
-    add_project_arguments(krb5_config_output.stdout().split(), language : 'c')
+    gssapi_lib_type = '64'
   endif
-
-  if enable_gssapi
-    add_project_arguments('-DLIBSOUP_HAVE_GSSAPI=1', language : 'c')
+  gssapi_lib = cc.find_library('gssapi' + gssapi_lib_type,
+    has_headers: 'gssapi/gssapi.h',
+    required: gssapi_opt)
+  if gssapi_lib.found()
+      enable_gssapi = true
+      add_project_link_arguments('gssapi@0@.lib'.format(gssapi_lib_type), language : 'c')
   endif
+else
+  krb5_config_path = get_option('krb5_config')
+  if not meson.is_cross_build() and krb5_config_path == ''
+    krb5_config_path = 'krb5-config'
+  endif
+  krb5_config = find_program(krb5_config_path, required : gssapi_opt)
+  if krb5_config.found()
+    libs_output = run_command (krb5_config, '--libs', 'gssapi', check: gssapi_opt.enabled())
+    cflags_output = run_command (krb5_config, '--cflags', 'gssapi', check: gssapi_opt.enabled())
+    if libs_output.returncode() == 0 and cflags_output.returncode() == 0
+      enable_gssapi = true
+      add_project_link_arguments(libs_output.stdout().split(), language : 'c')
+      add_project_arguments(cflags_output.stdout().split(), language : 'c')
+    endif
+  endif
+endif
+
+if enable_gssapi
+  add_project_arguments('-DLIBSOUP_HAVE_GSSAPI=1', language : 'c')
 endif
 
 ################
@@ -266,37 +326,35 @@ endif
 ################
 # NTLM not supported on Windows
 if host_machine.system() != 'windows'
-  enable_ntlm = get_option('ntlm')
-  if enable_ntlm
-    ntlm_auth = find_program(get_option('ntlm_auth'), required: false)
+  ntlm_auth = find_program(get_option('ntlm_auth'), required: get_option('ntlm'))
 
-    if ntlm_auth.found()
-      add_project_arguments('-DUSE_NTLM_AUTH=1', language : 'c')
-      add_project_arguments('-DNTLM_AUTH=' + ntlm_auth.path(), language : 'c')
-    endif
+  if ntlm_auth.found()
+    add_project_arguments('-DUSE_NTLM_AUTH=1', language : 'c')
+    add_project_arguments('-DNTLM_AUTH="' + ntlm_auth.path() + '"', language : 'c')
   endif
 endif
 
 #################
 # GNOME support #
 #################
-enable_gnome = get_option('gnome') and host_machine.system() != 'windows'
+enable_gnome = get_option('gnome')
 
 #########################
 # GObject introspection #
 #########################
-# FIXME: once we start to require meson 0.49.0+ and gnome-introspection 1.58.1+
-# the we can enable the introspection even for the static build. See
-# https://github.com/mesonbuild/meson/pull/4478.
-enable_introspection = get_option('introspection') and find_program('g-ir-scanner', required: false).found() and not meson.is_cross_build() and not is_static_library
+gir = find_program('g-ir-scanner', required: get_option('introspection'))
+enable_introspection = gir.found()
 
 ############
 # Vala API #
 ############
-enable_vapi = get_option('vapi')
-if enable_vapi
-  assert(enable_introspection, 'vapi support was requested, but introspection support is mandatory.')
-  assert(add_languages('vala', required: false), 'vapi support was requested, but vala not found.')
+vapi_opt = get_option('vapi')
+enable_vapi = add_languages('vala', required: vapi_opt)
+if enable_vapi and not enable_introspection
+  enable_vapi = false
+  if vapi_opt.enabled()
+    error('vapi support was requested, but introspection support is mandatory.')
+  endif
 endif
 
 configinc = include_directories('.')
@@ -309,6 +367,7 @@ cdata.set_quoted('GETTEXT_PACKAGE', libsoup_api_name)
 configure_file(output : 'config.h', configuration : cdata)
 
 subdir('libsoup')
+# xgettext is optional (on Windows for instance)
 if find_program('xgettext', required : false).found()
   subdir('po')
 endif
@@ -318,6 +377,7 @@ if get_option('tests')
   subdir('tests')
  endif
 
-if get_option('doc')
+if get_option('gtk_doc')
+  srcdir = include_directories('libsoup')
   subdir('docs/reference')
 endif

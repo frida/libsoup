@@ -24,6 +24,7 @@
 #include "soup-socket-private.h"
 #include "soup-websocket.h"
 #include "soup-websocket-connection.h"
+#include "soup-websocket-extension-manager-private.h"
 
 #define HOST_KEEP_ALIVE 5 * 60 * 1000 /* 5 min in msecs */
 
@@ -3216,6 +3217,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 	 * <literal>localhost</literal>. If you need more control over
 	 * proxies, you can create a #GSimpleProxyResolver and set the
 	 * #SoupSession:proxy-resolver property.
+	 *
+	 * Deprecated: 2.70: Use SoupSession:proxy-resolver along with #GSimpleProxyResolver.
 	 */
 	/**
 	 * SOUP_SESSION_PROXY_URI:
@@ -3228,7 +3231,9 @@ soup_session_class_init (SoupSessionClass *session_class)
 				    "Proxy URI",
 				    "The HTTP Proxy to use for this session",
 				    SOUP_TYPE_URI,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS |
+				    G_PARAM_DEPRECATED));
 	/**
 	 * SoupSession:proxy-resolver:
 	 *
@@ -3256,7 +3261,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "Proxy Resolver",
 				     "The GProxyResolver to use for this session",
 				     G_TYPE_PROXY_RESOLVER,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_SESSION_MAX_CONNS:
 	 *
@@ -3270,7 +3276,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				  1,
 				  G_MAXINT,
 				  SOUP_SESSION_MAX_CONNS_DEFAULT,
-				  G_PARAM_READWRITE));
+				  G_PARAM_READWRITE |
+				  G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_SESSION_MAX_CONNS_PER_HOST:
 	 *
@@ -3284,7 +3291,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				  1,
 				  G_MAXINT,
 				  SOUP_SESSION_MAX_CONNS_PER_HOST_DEFAULT,
-				  G_PARAM_READWRITE));
+				  G_PARAM_READWRITE |
+				  G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:idle-timeout:
 	 *
@@ -3317,7 +3325,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				   "Idle Timeout",
 				   "Connection lifetime when idle",
 				   0, G_MAXUINT, 60,
-				   G_PARAM_READWRITE));
+				   G_PARAM_READWRITE |
+				   G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:use-ntlm:
 	 *
@@ -3337,7 +3346,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				      "Use NTLM",
 				      "Whether or not to use NTLM authentication",
 				      FALSE,
-				      G_PARAM_READWRITE | G_PARAM_DEPRECATED));
+				      G_PARAM_READWRITE | G_PARAM_DEPRECATED |
+				      G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:ssl-ca-file:
 	 *
@@ -3363,7 +3373,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "SSL CA file",
 				     "File containing SSL CA certificates",
 				     NULL,
-				     G_PARAM_READWRITE | G_PARAM_DEPRECATED));
+				     G_PARAM_READWRITE | G_PARAM_DEPRECATED |
+				     G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE:
 	 *
@@ -3400,7 +3411,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				      "Use system CA file",
 				      "Use the system certificate database",
 				      TRUE,
-				      G_PARAM_READWRITE));
+				      G_PARAM_READWRITE |
+				      G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_SESSION_TLS_DATABASE:
 	 *
@@ -3436,7 +3448,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "TLS Database",
 				     "TLS database to use",
 				     G_TYPE_TLS_DATABASE,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_SESSION_SSL_STRICT:
 	 *
@@ -3478,7 +3491,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				      "Strictly validate SSL certificates",
 				      "Whether certificate errors should be considered a connection error",
 				      TRUE,
-				      G_PARAM_READWRITE));
+				      G_PARAM_READWRITE |
+				      G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:async-context:
 	 *
@@ -3506,7 +3520,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 		g_param_spec_pointer (SOUP_SESSION_ASYNC_CONTEXT,
 				      "Async GMainContext",
 				      "The GMainContext to dispatch async I/O in",
-				      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+				      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+				      G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_SESSION_USE_THREAD_CONTEXT:
 	 *
@@ -3531,7 +3546,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				      "Use thread-default GMainContext",
 				      "Whether to use thread-default main contexts",
 				      FALSE,
-				      G_PARAM_READWRITE));
+				      G_PARAM_READWRITE |
+				      G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:timeout:
 	 *
@@ -3565,7 +3581,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				   "Timeout value",
 				   "Value in seconds to timeout a blocking I/O",
 				   0, G_MAXUINT, 0,
-				   G_PARAM_READWRITE));
+				   G_PARAM_READWRITE |
+				   G_PARAM_STATIC_STRINGS));
 
 	/**
 	 * SoupSession:user-agent:
@@ -3605,7 +3622,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "User-Agent string",
 				     "User-Agent string",
 				     NULL,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 
 	/**
 	 * SoupSession:accept-language:
@@ -3631,7 +3649,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "Accept-Language string",
 				     "Accept-Language string",
 				     NULL,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 
 	/**
 	 * SoupSession:accept-language-auto:
@@ -3658,7 +3677,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				      "Accept-Language automatic mode",
 				      "Accept-Language automatic mode",
 				      FALSE,
-				      G_PARAM_READWRITE));
+				      G_PARAM_READWRITE |
+				      G_PARAM_STATIC_STRINGS));
 
 	/**
 	 * SoupSession:add-feature: (skip)
@@ -3681,7 +3701,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "Add Feature",
 				     "Add a feature object to the session",
 				     SOUP_TYPE_SESSION_FEATURE,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:add-feature-by-type: (skip)
 	 *
@@ -3703,7 +3724,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				    "Add Feature By Type",
 				    "Add a feature object of the given type to the session",
 				    G_TYPE_OBJECT,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:remove-feature-by-type: (skip)
 	 *
@@ -3726,7 +3748,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				    "Remove Feature By Type",
 				    "Remove features of the given type from the session",
 				    G_TYPE_OBJECT,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:http-aliases:
 	 *
@@ -3761,7 +3784,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				    "http aliases",
 				    "URI schemes that are considered aliases for 'http'",
 				    G_TYPE_STRV,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SoupSession:https-aliases:
 	 *
@@ -3787,7 +3811,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				    "https aliases",
 				    "URI schemes that are considered aliases for 'https'",
 				    G_TYPE_STRV,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
 
 	/**
 	 * SOUP_SESSION_LOCAL_ADDRESS:
@@ -3813,7 +3838,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "Local address",
 				     "Address of local end of socket",
 				     SOUP_TYPE_ADDRESS,
-				     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+				     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+				     G_PARAM_STATIC_STRINGS));
 
 	/**
 	 * SOUP_SESSION_TLS_INTERACTION:
@@ -3837,7 +3863,8 @@ soup_session_class_init (SoupSessionClass *session_class)
 				     "TLS Interaction",
 				     "TLS interaction to use",
 				     G_TYPE_TLS_INTERACTION,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 }
 
 
@@ -4244,6 +4271,12 @@ async_respond_from_cache (SoupSession          *session,
 		return FALSE;
 }
 
+static void
+cancel_cancellable (G_GNUC_UNUSED GCancellable *cancellable, GCancellable *chained_cancellable)
+{
+	g_cancellable_cancel (chained_cancellable);
+}
+
 /**
  * soup_session_send_async:
  * @session: a #SoupSession
@@ -4297,8 +4330,9 @@ soup_session_send_async (SoupSession         *session,
 			  G_CALLBACK (async_send_request_finished), item);
 
 	if (cancellable) {
-		g_object_unref (item->cancellable);
-		item->cancellable = g_object_ref (cancellable);
+		g_cancellable_connect (cancellable, G_CALLBACK (cancel_cancellable),
+				       g_object_ref (item->cancellable),
+				       (GDestroyNotify) g_object_unref);
 	}
 
 	item->new_api = TRUE;
@@ -4420,8 +4454,9 @@ soup_session_send (SoupSession   *session,
 
 	item->new_api = TRUE;
 	if (cancellable) {
-		g_object_unref (item->cancellable);
-		item->cancellable = g_object_ref (cancellable);
+		g_cancellable_connect (cancellable, G_CALLBACK (cancel_cancellable),
+				       g_object_ref (item->cancellable),
+				       (GDestroyNotify) g_object_unref);
 	}
 
 	while (!stream) {
@@ -4775,6 +4810,19 @@ soup_session_steal_connection (SoupSession *session,
 	return stream;
 }
 
+static GPtrArray *
+soup_session_get_supported_websocket_extensions_for_message (SoupSession *session,
+							     SoupMessage *msg)
+{
+        SoupSessionFeature *extension_manager;
+
+        extension_manager = soup_session_get_feature_for_message (session, SOUP_TYPE_WEBSOCKET_EXTENSION_MANAGER, msg);
+        if (!extension_manager)
+                return NULL;
+
+        return soup_websocket_extension_manager_get_supported_extensions (SOUP_WEBSOCKET_EXTENSION_MANAGER (extension_manager));
+}
+
 static void websocket_connect_async_stop (SoupMessage *msg, gpointer user_data);
 
 static void
@@ -4799,24 +4847,35 @@ websocket_connect_async_stop (SoupMessage *msg, gpointer user_data)
 	SoupMessageQueueItem *item = g_task_get_task_data (task);
 	GIOStream *stream;
 	SoupWebsocketConnection *client;
+	SoupSession *session = g_task_get_source_object (task);
+	GPtrArray *supported_extensions;
+	GList *accepted_extensions = NULL;
 	GError *error = NULL;
 
 	/* Disconnect websocket_connect_async_stop() handler. */
 	g_signal_handlers_disconnect_matched (msg, G_SIGNAL_MATCH_DATA,
 					      0, 0, NULL, NULL, task);
+	/* Ensure websocket_connect_async_complete is not called either. */
+	item->callback = NULL;
 
-	if (soup_websocket_client_verify_handshake (item->msg, &error)){
+	supported_extensions = soup_session_get_supported_websocket_extensions_for_message (session, msg);
+	if (soup_websocket_client_verify_handshake_with_extensions (item->msg, supported_extensions, &accepted_extensions, &error)) {
 		stream = soup_session_steal_connection (item->session, item->msg);
-		client = soup_websocket_connection_new (stream, 
-							soup_message_get_uri (item->msg),
-							SOUP_WEBSOCKET_CONNECTION_CLIENT,
-							soup_message_headers_get_one (msg->request_headers, "Origin"),
-							soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Protocol"));
+		client = soup_websocket_connection_new_with_extensions (stream,
+									soup_message_get_uri (item->msg),
+									SOUP_WEBSOCKET_CONNECTION_CLIENT,
+									soup_message_headers_get_one (msg->request_headers, "Origin"),
+									soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Protocol"),
+									accepted_extensions);
 		g_object_unref (stream);
-
 		g_task_return_pointer (task, client, g_object_unref);
-	} else
-		g_task_return_error (task, error);
+		g_object_unref (task);
+
+		return;
+	}
+
+	soup_message_io_finished (item->msg);
+	g_task_return_error (task, error);
 	g_object_unref (task);
 }
 
@@ -4864,12 +4923,24 @@ soup_session_websocket_connect_async (SoupSession          *session,
 	SoupSessionPrivate *priv = soup_session_get_instance_private (session);
 	SoupMessageQueueItem *item;
 	GTask *task;
+	GPtrArray *supported_extensions;
+	SoupMessageFlags flags;
 
 	g_return_if_fail (SOUP_IS_SESSION (session));
 	g_return_if_fail (priv->use_thread_context);
 	g_return_if_fail (SOUP_IS_MESSAGE (msg));
 
-	soup_websocket_client_prepare_handshake (msg, origin, protocols);
+	supported_extensions = soup_session_get_supported_websocket_extensions_for_message (session, msg);
+	soup_websocket_client_prepare_handshake_with_extensions (msg, origin, protocols, supported_extensions);
+
+	/* When the client is to _Establish a WebSocket Connection_ given a set
+	 * of (/host/, /port/, /resource name/, and /secure/ flag), along with a
+	 * list of /protocols/ and /extensions/ to be used, and an /origin/ in
+	 * the case of web browsers, it MUST open a connection, send an opening
+	 * handshake, and read the server's handshake in response.
+	 */
+	flags = soup_message_get_flags (msg);
+	soup_message_set_flags (msg, flags | SOUP_MESSAGE_NEW_CONNECTION);
 
 	task = g_task_new (session, cancellable, callback, user_data);
 	item = soup_session_append_queue_item (session, msg, TRUE, FALSE,

@@ -1008,7 +1008,8 @@ soup_cache_class_init (SoupCacheClass *cache_class)
 							      "Cache directory",
 							      "The directory to store the cache files",
 							      NULL,
-							      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+							      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+							      G_PARAM_STATIC_STRINGS));
 
 	g_object_class_install_property (gobject_class, PROP_CACHE_TYPE,
 					 g_param_spec_enum ("cache-type",
@@ -1016,7 +1017,8 @@ soup_cache_class_init (SoupCacheClass *cache_class)
 							    "Whether the cache is private or shared",
 							    SOUP_TYPE_CACHE_TYPE,
 							    SOUP_CACHE_SINGLE_USER,
-							    G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+							    G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+							    G_PARAM_STATIC_STRINGS));
 }
 
 /**
@@ -1354,7 +1356,6 @@ soup_cache_generate_conditional_request (SoupCache *cache, SoupMessage *original
 	SoupURI *uri;
 	SoupCacheEntry *entry;
 	const char *last_modified, *etag;
-	SoupMessagePrivate *origpriv;
 	GSList *f;
 
 	g_return_val_if_fail (SOUP_IS_CACHE (cache), NULL);
@@ -1382,8 +1383,7 @@ soup_cache_generate_conditional_request (SoupCache *cache, SoupMessage *original
 				      (SoupMessageHeadersForeachFunc)copy_headers,
 				      msg->request_headers);
 
-	origpriv = SOUP_MESSAGE_GET_PRIVATE (original);
-	for (f = origpriv->disabled_features; f; f = f->next)
+	for (f = soup_message_get_disabled_features (original); f; f = f->next)
 		soup_message_disable_feature (msg, (GType) GPOINTER_TO_SIZE (f->data));
 
 	if (last_modified)

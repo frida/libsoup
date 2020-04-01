@@ -144,6 +144,8 @@ enum {
 	PROP_TLS_CERTIFICATE,
 	PROP_TLS_ERRORS,
 	PROP_PRIORITY,
+	PROP_SITE_FOR_COOKIES,
+	PROP_IS_TOP_LEVEL_NAVIGATION,
 
 	LAST_PROP
 };
@@ -174,6 +176,7 @@ soup_message_finalize (GObject *object)
 
 	g_clear_pointer (&priv->uri, soup_uri_free);
 	g_clear_pointer (&priv->first_party, soup_uri_free);
+	g_clear_pointer (&priv->site_for_cookies, soup_uri_free);
 	g_clear_object (&priv->addr);
 
 	g_clear_object (&priv->auth);
@@ -206,6 +209,12 @@ soup_message_set_property (GObject *object, guint prop_id,
 		break;
 	case PROP_URI:
 		soup_message_set_uri (msg, g_value_get_boxed (value));
+		break;
+	case PROP_SITE_FOR_COOKIES:
+		soup_message_set_site_for_cookies (msg, g_value_get_boxed (value));
+		break;
+	case PROP_IS_TOP_LEVEL_NAVIGATION:
+		soup_message_set_is_top_level_navigation (msg, g_value_get_boolean (value));
 		break;
 	case PROP_HTTP_VERSION:
 		soup_message_set_http_version (msg, g_value_get_enum (value));
@@ -269,6 +278,12 @@ soup_message_get_property (GObject *object, guint prop_id,
 		break;
 	case PROP_URI:
 		g_value_set_boxed (value, priv->uri);
+		break;
+	case PROP_SITE_FOR_COOKIES:
+		g_value_set_boxed (value, priv->site_for_cookies);
+		break;
+	case PROP_IS_TOP_LEVEL_NAVIGATION:
+		g_value_set_boolean (value, priv->is_top_level_navigation);
 		break;
 	case PROP_HTTP_VERSION:
 		g_value_set_enum (value, priv->http_version);
@@ -698,7 +713,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				     "Method",
 				     "The message's HTTP method",
 				     SOUP_METHOD_GET,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_URI:
 	 *
@@ -711,7 +727,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "URI",
 				    "The message's Request-URI",
 				    SOUP_TYPE_URI,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_HTTP_VERSION:
 	 *
@@ -725,7 +742,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				   "The HTTP protocol version to use",
 				   SOUP_TYPE_HTTP_VERSION,
 				   SOUP_HTTP_1_1,
-				   G_PARAM_READWRITE));
+				   G_PARAM_READWRITE |
+				   G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_FLAGS:
 	 *
@@ -739,7 +757,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "Various message options",
 				    SOUP_TYPE_MESSAGE_FLAGS,
 				    0,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_SERVER_SIDE:
 	 *
@@ -752,7 +771,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				      "Server-side",
 				      "Whether or not the message is server-side rather than client-side",
 				      FALSE,
-				      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY));
+				      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
+				      G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_STATUS_CODE:
 	 *
@@ -765,7 +785,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				   "Status code",
 				   "The HTTP response status code",
 				   0, 999, 0,
-				   G_PARAM_READWRITE));
+				   G_PARAM_READWRITE |
+				   G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_REASON_PHRASE:
 	 *
@@ -778,7 +799,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				     "Reason phrase",
 				     "The HTTP response reason phrase",
 				     NULL,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_FIRST_PARTY:
 	 *
@@ -802,7 +824,36 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "First party",
 				    "The URI loaded in the application when the message was requested.",
 				    SOUP_TYPE_URI,
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
+	/**
+	 * SoupMessage:site-for-cookkies:
+	 *
+	 * Site used to compare cookies against. Used for SameSite cookie support.
+	 *
+	 * Since: 2.70
+	 */
+	g_object_class_install_property (
+		object_class, PROP_SITE_FOR_COOKIES,
+		g_param_spec_boxed (SOUP_MESSAGE_SITE_FOR_COOKIES,
+				    "Site for cookies",
+				    "The URI for the site to compare cookies against",
+				    SOUP_TYPE_URI,
 				    G_PARAM_READWRITE));
+	/**
+	 * SoupMessage:is-top-level-navigation:
+	 *
+	 * Set when the message is navigating between top level domains.
+	 *
+	 * Since: 2.70
+	 */
+	g_object_class_install_property (
+		object_class, PROP_IS_TOP_LEVEL_NAVIGATION,
+		g_param_spec_boolean (SOUP_MESSAGE_IS_TOP_LEVEL_NAVIGATION,
+				     "Is top-level navigation",
+				     "If the current messsage is navigating between top-levels",
+				     FALSE,
+				     G_PARAM_READWRITE));
 	/**
 	 * SOUP_MESSAGE_REQUEST_BODY:
 	 *
@@ -815,7 +866,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "Request Body",
 				    "The HTTP request content",
 				    SOUP_TYPE_MESSAGE_BODY,
-				    G_PARAM_READABLE));
+				    G_PARAM_READABLE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_REQUEST_BODY_DATA:
 	 *
@@ -837,7 +889,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "Request Body Data",
 				    "The HTTP request body",
 				    G_TYPE_BYTES,
-				    G_PARAM_READABLE));
+				    G_PARAM_READABLE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_REQUEST_HEADERS:
 	 *
@@ -850,7 +903,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "Request Headers",
 				    "The HTTP request headers",
 				    SOUP_TYPE_MESSAGE_HEADERS,
-				    G_PARAM_READABLE));
+				    G_PARAM_READABLE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_RESPONSE_BODY:
 	 *
@@ -863,7 +917,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "Response Body",
 				    "The HTTP response content",
 				    SOUP_TYPE_MESSAGE_BODY,
-				    G_PARAM_READABLE));
+				    G_PARAM_READABLE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_RESPONSE_BODY_DATA:
 	 *
@@ -885,7 +940,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "Response Body Data",
 				    "The HTTP response body",
 				    G_TYPE_BYTES,
-				    G_PARAM_READABLE));
+				    G_PARAM_READABLE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_RESPONSE_HEADERS:
 	 *
@@ -898,7 +954,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "Response Headers",
 				     "The HTTP response headers",
 				    SOUP_TYPE_MESSAGE_HEADERS,
-				    G_PARAM_READABLE));
+				    G_PARAM_READABLE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_TLS_CERTIFICATE:
 	 *
@@ -920,7 +977,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				     "TLS Certificate",
 				     "The TLS certificate associated with the message",
 				     G_TYPE_TLS_CERTIFICATE,
-				     G_PARAM_READWRITE));
+				     G_PARAM_READWRITE |
+				     G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_TLS_ERRORS:
 	 *
@@ -942,7 +1000,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				    "TLS Errors",
 				    "The verification errors on the message's TLS certificate",
 				    G_TYPE_TLS_CERTIFICATE_FLAGS, 0,
-				    G_PARAM_READWRITE));
+				    G_PARAM_READWRITE |
+				    G_PARAM_STATIC_STRINGS));
 	/**
 	 * SOUP_MESSAGE_PRIORITY:
 	 *
@@ -958,7 +1017,8 @@ soup_message_class_init (SoupMessageClass *message_class)
 				   "The priority of the message",
 				   SOUP_TYPE_MESSAGE_PRIORITY,
 				   SOUP_MESSAGE_PRIORITY_NORMAL,
-				   G_PARAM_READWRITE));
+				   G_PARAM_READWRITE |
+				   G_PARAM_STATIC_STRINGS));
 }
 
 
@@ -1860,6 +1920,31 @@ soup_message_disables_feature (SoupMessage *msg, gpointer feature)
 	return FALSE;
 }
 
+gboolean
+soup_message_disables_feature_by_type (SoupMessage *msg, GType feature_type)
+{
+        SoupMessagePrivate *priv;
+        GSList *f;
+
+        g_return_val_if_fail (SOUP_IS_MESSAGE (msg), FALSE);
+
+        priv = soup_message_get_instance_private (msg);
+
+        for (f = priv->disabled_features; f; f = f->next) {
+                if (g_type_is_a ((GType)GPOINTER_TO_SIZE (f->data), feature_type))
+                        return TRUE;
+        }
+        return FALSE;
+}
+
+GSList *
+soup_message_get_disabled_features (SoupMessage *msg)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	return priv->disabled_features;
+}
+
 /**
  * soup_message_get_first_party:
  * @msg: a #SoupMessage
@@ -1912,6 +1997,111 @@ soup_message_set_first_party (SoupMessage *msg,
 
 	priv->first_party = soup_uri_copy (first_party);
 	g_object_notify (G_OBJECT (msg), SOUP_MESSAGE_FIRST_PARTY);
+}
+
+/**
+ * soup_message_get_site_for_cookies:
+ * @msg: a #SoupMessage
+ *
+ * Gets @msg's site for cookies #SoupURI
+ *
+ * Returns: (transfer none): the @msg's site for cookies #SoupURI
+ *
+ * Since: 2.70
+ **/
+SoupURI *
+soup_message_get_site_for_cookies (SoupMessage *msg)
+{
+	SoupMessagePrivate *priv;
+
+	g_return_val_if_fail (SOUP_IS_MESSAGE (msg), NULL);
+
+	priv = soup_message_get_instance_private (msg);
+	return priv->site_for_cookies;
+}
+
+/**
+ * soup_message_set_site_for_cookies:
+ * @msg: a #SoupMessage
+ * @site_for_cookies: (nullable): the #SoupURI for the @msg's site for cookies
+ *
+ * Sets @site_for_cookies as the policy URL for same-site cookies for @msg.
+ *
+ * It is either the URL of the top-level document or %NULL depending on whether the registrable
+ * domain of this document's URL matches the registrable domain of its parent's/opener's
+ * URL. For the top-level document it is set to the document's URL.
+ *
+ * See the [same-site spec](https://tools.ietf.org/html/draft-ietf-httpbis-cookie-same-site-00)
+ * for more information.
+ *
+ * Since: 2.70
+ **/
+void
+soup_message_set_site_for_cookies (SoupMessage *msg,
+			           SoupURI     *site_for_cookies)
+{
+	SoupMessagePrivate *priv;
+
+	g_return_if_fail (SOUP_IS_MESSAGE (msg));
+
+	priv = soup_message_get_instance_private (msg);
+
+	if (priv->site_for_cookies == site_for_cookies)
+		return;
+
+	if (priv->site_for_cookies) {
+		if (site_for_cookies && soup_uri_equal (priv->site_for_cookies, site_for_cookies))
+			return;
+
+		soup_uri_free (priv->site_for_cookies);
+	}
+
+	priv->site_for_cookies = site_for_cookies ? soup_uri_copy (site_for_cookies) : NULL;
+	g_object_notify (G_OBJECT (msg), SOUP_MESSAGE_SITE_FOR_COOKIES);
+}
+
+/**
+ * soup_message_set_is_top_level_navigation:
+ * @msg: a #SoupMessage
+ * @is_top_level_navigation: if %TRUE indicate the current request is a top-level navigation
+ *
+ * See the [same-site spec](https://tools.ietf.org/html/draft-ietf-httpbis-cookie-same-site-00)
+ * for more information.
+ *
+ * Since: 2.70
+ **/
+void
+soup_message_set_is_top_level_navigation (SoupMessage *msg,
+			                 gboolean     is_top_level_navigation)
+{
+	SoupMessagePrivate *priv;
+
+	g_return_if_fail (SOUP_IS_MESSAGE (msg));
+
+	priv = soup_message_get_instance_private (msg);
+
+	if (priv->is_top_level_navigation == is_top_level_navigation)
+		return;
+
+	priv->is_top_level_navigation = is_top_level_navigation;
+	g_object_notify (G_OBJECT (msg), SOUP_MESSAGE_IS_TOP_LEVEL_NAVIGATION);
+}
+
+/**
+ * soup_message_get_is_top_level_navigation:
+ * @msg: a #SoupMessage
+ *
+ * Since: 2.70
+ **/
+gboolean
+soup_message_get_is_top_level_navigation (SoupMessage *msg)
+{
+	SoupMessagePrivate *priv;
+
+	g_return_val_if_fail (SOUP_IS_MESSAGE (msg), FALSE);
+
+	priv = soup_message_get_instance_private (msg);
+	return priv->is_top_level_navigation;
 }
 
 void
@@ -2115,4 +2305,64 @@ soup_message_get_priority (SoupMessage *msg)
 	priv = soup_message_get_instance_private (msg);
 
 	return priv->priority;
+}
+
+gpointer
+soup_message_get_io_data (SoupMessage *msg)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	return priv->io_data;
+}
+
+void
+soup_message_set_io_data (SoupMessage *msg, gpointer io)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	priv->io_data = io;
+}
+
+SoupContentSniffer *
+soup_message_get_content_sniffer (SoupMessage *msg)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	return priv->sniffer;
+}
+
+void
+soup_message_set_content_sniffer (SoupMessage *msg, SoupContentSniffer *sniffer)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	if (priv->sniffer)
+		g_object_unref (priv->sniffer);
+
+	priv->sniffer = sniffer ? g_object_ref (sniffer) : NULL;
+}
+
+void
+soup_message_set_bytes_for_sniffing (SoupMessage *msg, gsize bytes)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	priv->bytes_for_sniffing = bytes;
+}
+
+gboolean
+soup_message_has_chunk_allocator (SoupMessage *msg)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	return priv->chunk_allocator != NULL;
+}
+
+SoupBuffer *
+soup_message_allocate_chunk (SoupMessage *msg,
+			     goffset read_length)
+{
+	SoupMessagePrivate *priv = soup_message_get_instance_private (msg);
+
+	return priv->chunk_allocator (msg, read_length, priv->chunk_allocator_data);
 }

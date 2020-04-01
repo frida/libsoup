@@ -291,6 +291,7 @@ soup_auth_ntlm_free_connection_state (SoupConnectionAuth *auth,
 
 	g_free (conn->nonce);
 	g_free (conn->response_header);
+	g_free (conn->target_info);
 	g_slice_free (SoupNTLMConnectionState, conn);
 }
 
@@ -730,6 +731,12 @@ soup_ntlm_parse_challenge (const char *challenge,
 	*ntlmv2_session = (flags & NTLM_FLAGS_NEGOTIATE_NTLMV2) ? TRUE : FALSE;
 	/* To know if NTLMv2 responses should be calculated */
 	*negotiate_target = (flags & NTLM_FLAGS_NEGOTIATE_TARGET_INFORMATION ) ? TRUE : FALSE;
+        if (*negotiate_target) {
+            if (clen < NTLM_CHALLENGE_TARGET_INFORMATION_OFFSET + sizeof (target)) {
+                g_free (chall);
+                return FALSE;
+            }
+        }
 
 	if (default_domain) {
 		memcpy (&domain, chall + NTLM_CHALLENGE_DOMAIN_STRING_OFFSET, sizeof (domain));
@@ -812,8 +819,6 @@ calc_hmac_md5 (unsigned char *hmac, const guchar *key, gsize key_sz, const gucha
 	hex_pos = hmac_hex;
 	for (count = 0; count < HMAC_MD5_LENGTH; count++)
 	{
-		unsigned int tmp_hmac;
-
 		/* The 'hh' sscanf format modifier is C99, so we enable it on
 		 * non-Windows or if __USE_MINGW_ANSI_STDIO is enabled or`
 		 * if we are building on Visual Studio 2015 or later
@@ -821,6 +826,7 @@ calc_hmac_md5 (unsigned char *hmac, const guchar *key, gsize key_sz, const gucha
 #if !defined (G_OS_WIN32) || (__USE_MINGW_ANSI_STDIO == 1) || (_MSC_VER >= 1900)
 		sscanf(hex_pos, "%2hhx", &hmac[count]);
 #else
+		unsigned int tmp_hmac;
 		sscanf(hex_pos, "%2x", &tmp_hmac);
 		hmac[count] = (guint8)tmp_hmac;
 #endif
@@ -848,15 +854,17 @@ calc_ntlmv2_response (const char *user, const char *domain,
 	guchar *nonce_blob, *blob, *p_blob;
 	unsigned char nonce_blob_hash[HMAC_MD5_LENGTH];
 	unsigned char nonce_client_nonce[16], nonce_client_nonce_hash[HMAC_MD5_LENGTH];
-	gchar *user_domain, *user_domain_conv;
+	gchar *user_uppercase, *user_domain, *user_domain_conv;
 	gsize user_domain_conv_sz;
 	size_t blob_sz;
 	int i;
 
 	/* create HMAC-MD5 hash of Unicode uppercase username and Unicode domain */
-	user_domain = g_strconcat ((const gchar *) g_utf8_strup ((const gchar *) user, (gsize) strlen(user)), (gchar *) domain, NULL);
+	user_uppercase = g_utf8_strup (user, strlen (user));
+	user_domain = g_strconcat (user_uppercase, domain, NULL);
 	user_domain_conv = g_convert (user_domain, -1, "UCS-2LE", "UTF-8", NULL, &user_domain_conv_sz, NULL);
 	calc_hmac_md5 (ntv2_hash, nt_hash, nt_hash_sz, (const guchar *)user_domain_conv, user_domain_conv_sz);
+	g_free (user_uppercase);
 	g_free (user_domain);
 	g_free (user_domain_conv);
 
@@ -961,7 +969,7 @@ soup_ntlm_response (const char *nonce,
 	memset (&resp, 0, sizeof (resp));
 	memcpy (resp.header, NTLM_RESPONSE_HEADER, sizeof (resp.header));
 	resp.flags = GUINT32_TO_LE (NTLM_RESPONSE_FLAGS);
-	if (ntlmv2_session && !negotiate_target)
+	if (ntlmv2_session)
 		resp.flags |= GUINT32_TO_LE (NTLMSSP_NEGOTIATE_EXTENDED_SESSIONSECURITY);
 	if (negotiate_target)
 			resp.flags |= GUINT32_TO_LE (NTLM_FLAGS_REQUEST_TARGET);

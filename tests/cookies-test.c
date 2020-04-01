@@ -209,6 +209,49 @@ do_cookies_subdomain_policy_test (void)
 	g_object_unref (jar);
 }
 
+static void
+do_cookies_strict_secure_test (void)
+{
+	SoupCookieJar *jar;
+	GSList *cookies;
+	SoupURI *insecure_uri;
+	SoupURI *secure_uri;
+
+	insecure_uri = soup_uri_new ("http://gnome.org");
+	secure_uri = soup_uri_new ("https://gnome.org");
+	jar = soup_cookie_jar_new ();
+
+	/* Set a cookie from secure origin */
+	soup_cookie_jar_set_cookie (jar, secure_uri, "1=foo; secure");
+	cookies = soup_cookie_jar_all_cookies (jar);
+	g_assert_cmpint (g_slist_length (cookies), ==, 1);
+	g_assert_cmpstr (soup_cookie_get_value(cookies->data), ==, "foo");
+	g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
+
+	/* Do not allow an insecure origin to overwrite a secure cookie */
+	soup_cookie_jar_set_cookie (jar, insecure_uri, "1=bar");
+	cookies = soup_cookie_jar_all_cookies (jar);
+	g_assert_cmpint (g_slist_length (cookies), ==, 1);
+	g_assert_cmpstr (soup_cookie_get_value(cookies->data), ==, "foo");
+	g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
+
+	/* Secure can only be set by from secure origin */
+	soup_cookie_jar_set_cookie (jar, insecure_uri, "2=foo; secure");
+	cookies = soup_cookie_jar_all_cookies (jar);
+	g_assert_cmpint (g_slist_length (cookies), ==, 1);
+	g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
+
+	/* But we can make one for another path */
+	soup_cookie_jar_set_cookie (jar, insecure_uri, "1=foo; path=/foo");
+	cookies = soup_cookie_jar_all_cookies (jar);
+	g_assert_cmpint (g_slist_length (cookies), ==, 2);
+	g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
+
+	soup_uri_free (insecure_uri);
+	soup_uri_free (secure_uri);
+	g_object_unref (jar);
+}
+
 /* FIXME: moar tests! */
 static void
 do_cookies_parsing_test (void)
@@ -235,13 +278,13 @@ do_cookies_parsing_test (void)
 
 	msg = soup_message_new_from_uri ("GET", first_party_uri);
 	soup_message_headers_append (msg->request_headers, "Echo-Set-Cookie",
-				     "two=2; HttpOnly; max-age=100");
+				     "two=2; HttpOnly; max-age=100; SameSite=Invalid");
 	soup_session_send_message (session, msg);
 	g_object_unref (msg);
 
 	msg = soup_message_new_from_uri ("GET", first_party_uri);
 	soup_message_headers_append (msg->request_headers, "Echo-Set-Cookie",
-				     "three=3; httpONLY=Wednesday; max-age=100");
+				     "three=3; httpONLY=Wednesday; max-age=100; SameSite=Lax");
 	soup_session_send_message (session, msg);
 	g_object_unref (msg);
 
@@ -259,10 +302,12 @@ do_cookies_parsing_test (void)
 			got2 = TRUE;
 			g_assert_true (soup_cookie_get_http_only (cookie));
 			g_assert_true (soup_cookie_get_expires (cookie) != NULL);
+			g_assert_cmpint (soup_cookie_get_same_site_policy (cookie), ==, SOUP_SAME_SITE_POLICY_NONE);
 		} else if (!strcmp (soup_cookie_get_name (cookie), "three")) {
 			got3 = TRUE;
 			g_assert_true (soup_cookie_get_http_only (cookie));
 			g_assert_true (soup_cookie_get_expires (cookie) != NULL);
+			g_assert_cmpint (soup_cookie_get_same_site_policy (cookie), ==, SOUP_SAME_SITE_POLICY_LAX);
 		} else {
 			soup_test_assert (FALSE, "got unexpected cookie '%s'",
 					  soup_cookie_get_name (cookie));
@@ -334,6 +379,7 @@ do_remove_feature_test (void)
 
 	g_main_loop_run(loop);
 
+	g_main_loop_unref (loop);
 	g_object_unref (msg);
 	soup_uri_free (uri);
 }
@@ -361,6 +407,7 @@ main (int argc, char **argv)
 	g_test_add_func ("/cookies/parsing/no-path-null-origin", do_cookies_parsing_nopath_nullorigin);
 	g_test_add_func ("/cookies/get-cookies/empty-host", do_get_cookies_empty_host_test);
 	g_test_add_func ("/cookies/remove-feature", do_remove_feature_test);
+	g_test_add_func ("/cookies/secure-cookies", do_cookies_strict_secure_test);
 
 	ret = g_test_run ();
 

@@ -8,6 +8,7 @@ ignore_headers = [
   'soup-auth-digest.h',
   'soup-auth-ntlm.h',
   'soup-auth-negotiate.h',
+  'soup-brotli-decompressor.h',
   'soup-connection.h',
   'soup-connection-auth.h',
   'soup-message-queue.h',
@@ -39,6 +40,7 @@ ignore_headers = [
   'soup-cache-client-input-stream.h',
   'soup-socket-private.h',
   'soup-value-utils.h',
+  'soup-websocket-extension-manager-private.h',
   'soup-xmlrpc-old.h'
 ]
 
@@ -55,8 +57,9 @@ scan_args = [
 
 gnome.gtkdoc('libsoup-2.4',
   main_sgml : 'libsoup-2.4-docs.sgml',
-  src_dir : join_paths(meson.source_root(), 'libsoup'),
+  src_dir : srcdir,
   ignore_headers : ignore_headers,
+  namespace : 'soup',
   mkdb_args : mkdb_args,
   scan_args : scan_args,
   dependencies : libsoup_dep,

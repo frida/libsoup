@@ -32,6 +32,9 @@ soup_sources = [
   'soup-directory-input-stream.c',
   'soup-filter-input-stream.c',
   'soup-form.c',
+  'soup-hsts-enforcer.c',
+  'soup-hsts-enforcer-db.c',
+  'soup-hsts-policy.c',
   'soup-headers.c',
   'soup-init.c',
   'soup-io-stream.c',
@@ -72,6 +75,9 @@ soup_sources = [
   'soup-version.c',
   'soup-websocket.c',
   'soup-websocket-connection.c',
+  'soup-websocket-extension.c',
+  'soup-websocket-extension-deflate.c',
+  'soup-websocket-extension-manager.c',
   'soup-xmlrpc.c',
   'soup-xmlrpc-old.c',
 ]
@@ -103,6 +109,7 @@ soup_headers = [
   'soup-proxy-resolver-wrapper.h',
   'soup-session-private.h',
   'soup-socket-private.h',
+  'soup-websocket-extension-manager-private.h',
 ]
 
 soup_introspection_headers = [
@@ -123,6 +130,9 @@ soup_introspection_headers = [
   'soup-date.h',
   'soup-form.h',
   'soup-headers.h',
+  'soup-hsts-enforcer.h',
+  'soup-hsts-enforcer-db.h',
+  'soup-hsts-policy.h',
   'soup-logger.h',
   'soup-message.h',
   'soup-message-body.h',
@@ -154,6 +164,9 @@ soup_introspection_headers = [
   'soup-value-utils.h',
   'soup-websocket.h',
   'soup-websocket-connection.h',
+  'soup-websocket-extension.h',
+  'soup-websocket-extension-deflate.h',
+  'soup-websocket-extension-manager.h',
   'soup-xmlrpc.h',
   'soup-xmlrpc-old.h',
 ]
@@ -182,6 +195,12 @@ soup_gnome_introspection_headers = [
 soup_gnome_installed_headers = soup_gnome_introspection_headers + [
   'soup-gnome.h'
 ]
+
+if brotlidec_dep.found()
+  soup_sources += 'soup-brotli-decompressor.c'
+  soup_headers += 'soup-brotli-decompressor.h'
+endif
+
 
 includedir = join_paths(libsoup_api_name, meson.project_name())
 install_headers(soup_installed_headers, subdir : includedir)
@@ -216,11 +235,13 @@ libsoup_c_args  = [
 ]
 
 deps = [
-  glib_dep,
+  glib_deps,
   libxml_dep,
   sqlite_dep,
   libpsl_dep,
-  platform_deps
+  brotlidec_dep,
+  platform_deps,
+  libz_dep,
 ]
 
 libsoup = library('soup-@0@'.format(apiversion),
@@ -236,7 +257,7 @@ libsoup = library('soup-@0@'.format(apiversion),
   dependencies : deps)
 
 pkg.generate(libsoup,
-  libraries : glib_dep,
+  libraries : glib_deps,
   name : meson.project_name(),
   description : 'A glib-based HTTP library',
   filebase : libsoup_api_name,
@@ -246,7 +267,7 @@ pkg.generate(libsoup,
 libsoup_dep = declare_dependency(link_with : libsoup,
   include_directories : configinc,
   sources : soup_enum_h,
-  dependencies : glib_dep)
+  dependencies : [ platform_deps, glib_deps ])
 
 if enable_gnome
   soup_gnome_api_name = 'soup-gnome-' + apiversion

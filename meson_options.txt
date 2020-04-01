@@ -1,6 +1,6 @@
 option('gssapi',
-  type : 'boolean',
-  value : true,
+  type : 'feature',
+  value : 'auto',
   description : 'Build with GSSAPI support'
 )
 
@@ -11,8 +11,8 @@ option('krb5_config',
 )
 
 option('ntlm',
-  type : 'boolean',
-  value : false,
+  type : 'feature',
+  value : 'auto',
   description : 'Build with NTLM support'
 )
 
@@ -20,6 +20,12 @@ option('ntlm_auth',
   type : 'string',
   value : 'ntlm_auth',
   description : 'Where to look for ntlm_auth, path points to ntlm_auth installation (defaultly looking in PATH)'
+)
+
+option('brotli',
+  type : 'feature',
+  value : 'auto',
+  description : 'Build with Brotli decompression support'
 )
 
 option('tls_check',
@@ -35,18 +41,19 @@ option('gnome',
 )
 
 option('introspection',
-  type : 'boolean',
-  value : true,
+  type : 'feature',
+  value : 'auto',
+  yield : true,
   description : 'Build GObject Introspection data'
 )
 
 option('vapi',
-  type : 'boolean',
-  value : true,
+  type : 'feature',
+  value : 'auto',
   description : 'Build Vala bindings'
 )
 
-option('doc',
+option('gtk_doc',
   type: 'boolean',
   value: false,
   description: 'Enable generating the API reference'
@@ -56,4 +63,10 @@ option('tests',
   type: 'boolean',
   value: true,
   description: 'Enable unit tests compilation'
+)
+
+option('installed_tests',
+  type: 'boolean',
+  value: false,
+  description: 'Install tests for as-installed testing'
 )

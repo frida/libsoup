@@ -1,3 +1,219 @@
+Changes in libsoup from 2.69.90 to 2.70.0:
+
+	* Deprecate SoupSession:proxy-uri [Patrick Griffis]
+
+	* Update translations: Persian, Finnish, Ukrainian
+
+Changes in libsoup from 2.68.3 to 2.69.90:
+
+	* Add new API to expose support for same-site cookies [Patrick Griffis]
+
+	* Fix TRACE method not being considered safe and idempotent internally [Patrick
+	  Griffis]
+
+	* WebSockets: ensure a new connection is created for WebSocket requests [Carlos
+	  Garcia Campos]
+
+	* WebSockets: do not start the input source when IO is closing [Carlos Garcia
+	  Campos]
+
+	* Deprecate soup_date_to_timeval() [Claudio Saavedra]
+
+	* build: Update glib requirement to 2.58 [Xavier Claessens]
+
+	* Updated translations: Malay [Umarzuki Mochlis]
+
+Changes in libsoup from 2.68.2 to 2.68.3:
+
+        * Fixes to testing infrastructure [Simon McVittie]
+
+        * Enable GNOME support in mingw [Fabiano Fidêncio]
+
+        * Allow introspection in cross builds [Ross Burton]
+
+        * Updated translations: Chinese (Taiwan)
+
+Changes in libsoup from 2.68.1 to 2.68.2:
+
+        * Documentation fixes [Sonny Piers]
+
+        * Windows compatibility test fixes [Ignacio Casal Quinteiro]
+
+        * WebSockets: client_max_window_bits in server must have a value [Carlos Garcia Campos]
+
+        * build: improve diagnostics when detecting Apache [Simon McVittie]
+
+        * NTLM: Make v2 authentication more robust [Claudio Saavedra]
+
+        * Updated translations: British English, Chinese (Taiwan), Danish, Dutch
+
+Changes in libsoup from 2.68.0 to 2.68.1:
+
+        * Several memory leaks fixed in tests, examples, and parsing code [Claudio Saavedra]
+
+        * SoupServer: Fixes to Windows path handling [Ignacio Casal Quinteiro]
+
+Changes in libsoup from 2.67.93 to 2.68.0:
+
+        * Updated translations: Brazilian Portuguese, Croatian,
+          Friulian, Italian, Turkish
+
+Changes in libsoup from 2.67.92 to 2.67.93:
+
+        * SoupMessage: Handle Transfer-Encoding: identity for
+          compatibility reasons [#148, Thomas Bluemel, Normen Bolling]
+
+        * WebSockets: Only poll IO stream when needed [Carlos Garcia
+          Campos]
+
+        * WebSockets: Properly set cookies received during handshake
+          [Carlos Garcia Campos]
+
+        * WebSockets: Plug a couple of memory leaks and fix a few
+          read-after-free memory errors [Claudio Saavedra]
+
+        * WebSockets: document how web socket extensions should treat
+          buffers in case of error [Claudio Saavedrə]
+
+        * SoupSession: Don't reset user GCancellable internally [Tom
+          Bailey]
+
+        * Tests: Make tests installable [Simon McVittie]
+
+        * Remove deprecate GTimeVal internal usage [Claudio Saavedra]
+
+        * CI: increase coverage by enabling all features during
+          testing [Claudio Saavedra]
+
+        * Updated translations: Korean, German, Galician, Hungarian,
+          Slovenian, Latvian, Finnish, Serbian, Catalan, Polish
+
+Changes in libsoup from 2.67.91 to 2.67.92:
+
+        * Silence GTimeVal deprecation warnings. [Michael Catanzaro]
+
+        * API documentation and annotation fixes [Дилян Палаузов, Claudio Saavedra]
+
+        * Plug a couple of NTLM authentication memory leaks [#156, Claudio Saavedra]
+
+        * Fix build in SmartOS/SunOS [#157, Juraj Lutter]
+
+        * Meson: Use feature options [Xavier Claessens]
+
+        * Meson: Do not fallback to system krb5-config for cross-compilation
+          [Xavier Claessens]
+
+        * NTLM: Fix build with NTLM enabled [Claudio Saavedra]
+
+        * Updated translations: Basque, Czech, Indonesian, Lithuanian, Swedish
+
+Changes in libsoup from 2.67.90 to 2.67.91:
+
+        * HSTS: New API to retrieve information about existing HSTS policies
+          [Claudio Saavedra]
+
+        * Updated translations: French, Romanian, Spanish
+
+Changes in libsoup from 2.67.3 to 2.67.90a:
+
+        * WebSockets: add support for WebSocket extensions via new
+          SoupWebsocketExtensionManager and SoupWebsocketExtension API
+          [Carlos Garcia Campos]
+
+        * WebSockets: add support for the permessage-deflate extension, enabled
+          by default in SoupServer and in the client side only if SoupWebsocketExtensionManager
+          is added to a session [Carlos Garcia Campos]
+
+        * WebSockets: Allow sending close frames with no body [Carlos Garcia Campos]
+
+        * WebSockets: ignore messages after close has been sent and received [Carlos Garcia Campos]
+
+        * Meson: tls-check improved [Xavier Claessens]
+
+        * Meson: improve Apache checks [Claudio Saavedra]
+
+Changes in libsoup from 2.67.2 to 2.67.3:
+
+        * WebSockets: allow sending empty binary data [Carlos Garcia Campos]
+
+        * WebSockets: fail and load the connection on invalid payload length  [Carlos Garcia Campos]
+
+        * WebSockets: allow NULL characters in text messages data [Carlos Garcia Campos]
+
+        * WebSockets: Close connection on wrongly masked/unmasked frame as per RFC [Carlos Garcia Campos]
+
+        * WebSockets: other code fixes [Carlos Garcia Campos]
+
+        * NTLM: Fix NTLMv2 authentication [Thibaut Robert]
+
+        * SoupMessage: fix several deprecation warnings related to private data [Claudio Saavedra]
+
+Changes in libsoup from 2.67.1 to 2.67.2:
+
+        * gobject-introspection: Fix annotation for soup_auth_new()
+          [Rico Tzschichholz]
+
+        * brotli: Do not advertise the decoder as it's failing with
+          some websites [Patrick Griffis]
+
+        * Meson: Fix xml2 and sqlite fallbacks [Xavier Claessens]
+
+        * HSTS: Add SoupHSTSEnforcer:hsts-enforced signal [Claudio
+          Saavedra]
+
+        * HSTS: Fixes to the types used to store policies in the
+          SQLite storage [Claudio Saavedra]
+
+        * HSTS: Accept Strict-Transport-Security regardless of casing
+          [Claudio Saavedra]
+
+        * WebSockets: Ensure messages finishes when handshake fails
+          [Carlos Garcia Campos]
+
+        * WebSockets: Fix critical warnings and test failures [Carlos
+          Garcia Campos]
+
+Changes in libsoup from 2.66.2 to 2.67.1:
+
+        * Add a brotli decoder. This adds a new dependency on libbrotli
+	  [Patrick Griffis]
+
+        * Add strict secure cookies support [Patrick Griffis]
+
+        * Add HSTS enforcer SoupSession feature (with both memory
+          and sqlite backends) [Adrien Plazas, Claudio Saavedra]
+
+        * meson gtk-doc documentation fixes [Claudio Saavedra]
+
+        * Bump the CI test image to Fedora 30 and add libbrotli
+          dependency [Claudio Saavedra]
+
+Changes in libsoup from 2.66.1 to 2.66.2:
+
+	* Make gettext optional (might not be available in Windows)
+	  [Seungha Yang]
+
+	* MSVC: set encoding to UTF-8 to avoid errors [Seungha Yang]
+
+	* MinGW tests build fix [Tomas Popela]
+
+	* Check for TLS support only when external glib dependency is available
+	  [Seungha Yang]
+
+Changes in libsoup from 2.66.0 to 2.66.1:
+
+        * Fix dylib versioning in MacOS [Tom Schoonjans]
+
+        * Visual Studio build fixes [Chun-wei Fan]
+
+        * MinGW build fixes [Руслан Ижбулатов]
+
+        * Meson build system improvements [Claudio Saavedra, Jakub Adam]
+
+        * Fix random CI failures due to parallel apache tests [Claudio Saavedra]
+
+        * Code cleanups [Claudio Saavedra]
+
 Changes in libsoup from 2.65.92 to 2.66.0:
 
         * Fix lookup for libxml2 on Visual Studio builds [Chun-wei Fan]

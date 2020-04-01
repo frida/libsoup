@@ -24,7 +24,9 @@
 
 #include "soup-websocket-connection.h"
 #include "soup-enum-types.h"
+#include "soup-io-stream.h"
 #include "soup-uri.h"
+#include "soup-websocket-extension.h"
 
 /*
  * SECTION:websocketconnection
@@ -83,6 +85,7 @@ enum {
 	PROP_STATE,
 	PROP_MAX_INCOMING_PAYLOAD_SIZE,
 	PROP_KEEPALIVE_INTERVAL,
+	PROP_EXTENSIONS
 };
 
 enum {
@@ -144,16 +147,104 @@ struct _SoupWebsocketConnectionPrivate {
 	GByteArray *message_data;
 
 	GSource *keepalive_timeout;
+
+	GList *extensions;
 };
 
 #define MAX_INCOMING_PAYLOAD_SIZE_DEFAULT   128 * 1024
+#define READ_BUFFER_SIZE 1024
+#define MASK_LENGTH 4
 
 G_DEFINE_TYPE_WITH_PRIVATE (SoupWebsocketConnection, soup_websocket_connection, G_TYPE_OBJECT)
 
 static void queue_frame (SoupWebsocketConnection *self, SoupWebsocketQueueFlags flags,
 			 gpointer data, gsize len, gsize amount);
 
+static void emit_error_and_close (SoupWebsocketConnection *self,
+				  GError *error, gboolean prejudice);
+
 static void protocol_error_and_close (SoupWebsocketConnection *self);
+
+static gboolean on_web_socket_input (GObject *pollable_stream,
+				     gpointer user_data);
+static gboolean on_web_socket_output (GObject *pollable_stream,
+				      gpointer user_data);
+
+/* Code below is based on g_utf8_validate() implementation,
+ * but handling NULL characters as valid, as expected by
+ * WebSockets and compliant with RFC 3629.
+ */
+#define VALIDATE_BYTE(mask, expect)                             \
+        G_STMT_START {                                          \
+          if (G_UNLIKELY((*(guchar *)p & (mask)) != (expect)))  \
+                  return FALSE;                                 \
+        } G_STMT_END
+
+/* see IETF RFC 3629 Section 4 */
+static gboolean
+utf8_validate (const char *str,
+               gsize max_len)
+
+{
+        const gchar *p;
+
+        for (p = str; ((p - str) < max_len); p++) {
+                if (*(guchar *)p < 128)
+                        /* done */;
+                else {
+                        if (*(guchar *)p < 0xe0) { /* 110xxxxx */
+                                if (G_UNLIKELY (max_len - (p - str) < 2))
+                                        return FALSE;
+
+                                if (G_UNLIKELY (*(guchar *)p < 0xc2))
+                                        return FALSE;
+                        } else {
+                                if (*(guchar *)p < 0xf0) { /* 1110xxxx */
+                                        if (G_UNLIKELY (max_len - (p - str) < 3))
+                                                return FALSE;
+
+                                        switch (*(guchar *)p++ & 0x0f) {
+                                        case 0:
+                                                VALIDATE_BYTE(0xe0, 0xa0); /* 0xa0 ... 0xbf */
+                                                break;
+                                        case 0x0d:
+                                                VALIDATE_BYTE(0xe0, 0x80); /* 0x80 ... 0x9f */
+                                                break;
+                                        default:
+                                                VALIDATE_BYTE(0xc0, 0x80); /* 10xxxxxx */
+                                        }
+                                } else if (*(guchar *)p < 0xf5) { /* 11110xxx excluding out-of-range */
+                                        if (G_UNLIKELY (max_len - (p - str) < 4))
+                                                return FALSE;
+
+                                        switch (*(guchar *)p++ & 0x07) {
+                                        case 0:
+                                                VALIDATE_BYTE(0xc0, 0x80); /* 10xxxxxx */
+                                                if (G_UNLIKELY((*(guchar *)p & 0x30) == 0))
+                                                        return FALSE;
+                                                break;
+                                        case 4:
+                                                VALIDATE_BYTE(0xf0, 0x80); /* 0x80 ... 0x8f */
+                                                break;
+                                        default:
+                                                VALIDATE_BYTE(0xc0, 0x80); /* 10xxxxxx */
+                                        }
+                                        p++;
+                                        VALIDATE_BYTE(0xc0, 0x80); /* 10xxxxxx */
+                                } else {
+                                        return FALSE;
+                                }
+                        }
+
+                        p++;
+                        VALIDATE_BYTE(0xc0, 0x80); /* 10xxxxxx */
+                }
+        }
+
+        return TRUE;
+}
+
+#undef VALIDATE_BYTE
 
 static void
 frame_free (gpointer data)
@@ -207,7 +298,20 @@ on_iostream_closed (GObject *source,
 }
 
 static void
-stop_input (SoupWebsocketConnection *self)
+soup_websocket_connection_start_input_source (SoupWebsocketConnection *self)
+{
+	SoupWebsocketConnectionPrivate *pv = self->pv;
+
+	if (pv->input_source)
+		return;
+
+	pv->input_source = g_pollable_input_stream_create_source (pv->input, NULL);
+	g_source_set_callback (pv->input_source, (GSourceFunc)on_web_socket_input, self, NULL);
+	g_source_attach (pv->input_source, pv->main_context);
+}
+
+static void
+soup_websocket_connection_stop_input_source (SoupWebsocketConnection *self)
 {
 	SoupWebsocketConnectionPrivate *pv = self->pv;
 
@@ -220,7 +324,20 @@ stop_input (SoupWebsocketConnection *self)
 }
 
 static void
-stop_output (SoupWebsocketConnection *self)
+soup_websocket_connection_start_output_source (SoupWebsocketConnection *self)
+{
+	SoupWebsocketConnectionPrivate *pv = self->pv;
+
+	if (pv->output_source)
+		return;
+
+	pv->output_source = g_pollable_output_stream_create_source (pv->output, NULL);
+	g_source_set_callback (pv->output_source, (GSourceFunc)on_web_socket_output, self, NULL);
+	g_source_attach (pv->output_source, pv->main_context);
+}
+
+static void
+soup_websocket_connection_stop_output_source (SoupWebsocketConnection *self)
 {
 	SoupWebsocketConnectionPrivate *pv = self->pv;
 
@@ -265,8 +382,8 @@ close_io_stream (SoupWebsocketConnection *self)
 	close_io_stop_timeout (self);
 
 	if (!pv->io_closing) {
-		stop_input (self);
-		stop_output (self);
+		soup_websocket_connection_stop_input_source (self);
+		soup_websocket_connection_stop_output_source (self);
 		pv->io_closing = TRUE;
 		g_debug ("closing io stream");
 		g_io_stream_close_async (pv->io_stream, G_PRIORITY_DEFAULT,
@@ -281,12 +398,17 @@ shutdown_wr_io_stream (SoupWebsocketConnection *self)
 {
 	SoupWebsocketConnectionPrivate *pv = self->pv;
 	GSocket *socket;
+	GIOStream *base_iostream;
 	GError *error = NULL;
 
-	stop_output (self);
+	soup_websocket_connection_stop_output_source (self);
 
-	if (G_IS_SOCKET_CONNECTION (pv->io_stream)) {
-		socket = g_socket_connection_get_socket (G_SOCKET_CONNECTION (pv->io_stream));
+	base_iostream = SOUP_IS_IO_STREAM (pv->io_stream) ?
+		soup_io_stream_get_base_iostream (SOUP_IO_STREAM (pv->io_stream)) :
+		pv->io_stream;
+
+	if (G_IS_SOCKET_CONNECTION (base_iostream)) {
+		socket = g_socket_connection_get_socket (G_SOCKET_CONNECTION (base_iostream));
 		g_socket_shutdown (socket, FALSE, TRUE, &error);
 		if (error != NULL) {
 			g_debug ("error shutting down io stream: %s", error->message);
@@ -345,12 +467,14 @@ send_message (SoupWebsocketConnection *self,
 	      const guint8 *data,
 	      gsize length)
 {
-	gsize buffered_amount = length;
+	gsize buffered_amount;
 	GByteArray *bytes;
 	gsize frame_len;
 	guint8 *outer;
-	guint8 *mask = 0;
-	guint8 *at;
+	guint8 mask_offset;
+	GBytes *filtered_bytes;
+	GList *l;
+	GError *error = NULL;
 
 	if (!(soup_websocket_connection_get_state (self) == SOUP_WEBSOCKET_STATE_OPEN)) {
 		g_debug ("Ignoring message since the connection is closed or is closing");
@@ -361,11 +485,29 @@ send_message (SoupWebsocketConnection *self,
 	outer = bytes->data;
 	outer[0] = 0x80 | opcode;
 
+	filtered_bytes = g_bytes_new_static (data, length);
+	for (l = self->pv->extensions; l != NULL; l = g_list_next (l)) {
+		SoupWebsocketExtension *extension;
+
+		extension = (SoupWebsocketExtension *)l->data;
+		filtered_bytes = soup_websocket_extension_process_outgoing_message (extension, outer, filtered_bytes, &error);
+		if (error) {
+			g_byte_array_free (bytes, TRUE);
+			emit_error_and_close (self, error, FALSE);
+			return;
+		}
+	}
+
+	data = g_bytes_get_data (filtered_bytes, &length);
+	buffered_amount = length;
+
 	/* If control message, check payload size */
 	if (opcode & 0x08) {
 		if (length > 125) {
 			g_warning ("WebSocket control message payload exceeds size limit");
 			protocol_error_and_close (self);
+			g_byte_array_free (bytes, TRUE);
+			g_bytes_unref (filtered_bytes);
 			return;
 		}
 
@@ -403,20 +545,20 @@ send_message (SoupWebsocketConnection *self,
 	if (self->pv->connection_type == SOUP_WEBSOCKET_CONNECTION_CLIENT) {
 		guint32 rnd = g_random_int ();
 		outer[1] |= 0x80;
-		mask = outer + bytes->len;
-		memcpy (mask, &rnd, sizeof (rnd));
-		bytes->len += 4;
+		mask_offset = bytes->len;
+		memcpy (outer + mask_offset, &rnd, sizeof (rnd));
+		bytes->len += MASK_LENGTH;
 	}
 
-	at = bytes->data + bytes->len;
 	g_byte_array_append (bytes, data, length);
 
 	if (self->pv->connection_type == SOUP_WEBSOCKET_CONNECTION_CLIENT)
-		xor_with_mask (mask, at, length);
+		xor_with_mask (bytes->data + mask_offset, bytes->data + mask_offset + MASK_LENGTH, length);
 
 	frame_len = bytes->len;
 	queue_frame (self, flags, g_byte_array_free (bytes, FALSE),
 		     frame_len, buffered_amount);
+	g_bytes_unref (filtered_bytes);
 	g_debug ("queued %d frame of len %u", (int)opcode, (guint)frame_len);
 }
 
@@ -536,9 +678,6 @@ too_big_error_and_close (SoupWebsocketConnection *self,
 		 self->pv->connection_type == SOUP_WEBSOCKET_CONNECTION_SERVER ? "server" : "client",
 	         payload_len, self->pv->max_incoming_payload_size);
 	emit_error_and_close (self, error, TRUE);
-
-	/* The input is in an invalid state now */
-	stop_input (self);
 }
 
 static void
@@ -578,6 +717,10 @@ close_connection (SoupWebsocketConnection *self,
 			         code);
 		}
 		break;
+	case SOUP_WEBSOCKET_CLOSE_NO_STATUS:
+		/* This is special case to send a close message with no body */
+		code = 0;
+		break;
 	default:
 		if (code < 3000) {
 			g_debug ("Wrong closing code %d received", code);
@@ -592,7 +735,7 @@ close_connection (SoupWebsocketConnection *self,
 		g_debug ("responding to close request");
 
 	flags = 0;
-	if (pv->connection_type == SOUP_WEBSOCKET_CONNECTION_SERVER && pv->close_received)
+	if (pv->close_received)
 		flags |= SOUP_WEBSOCKET_QUEUE_LAST;
 	send_close (self, flags, code, data);
 	close_io_after_timeout (self);
@@ -613,6 +756,7 @@ receive_close (SoupWebsocketConnection *self,
 	switch (len) {
 	case 0:
 		/* Send a clean close when having an empty payload */
+		pv->peer_close_code = SOUP_WEBSOCKET_CLOSE_NO_STATUS;
 		close_connection (self, 1000, NULL);
 		return;
 	case 1:
@@ -629,7 +773,7 @@ receive_close (SoupWebsocketConnection *self,
 		data += 2;
 		len -= 2;
 		
-		if (!g_utf8_validate ((char *)data, len, NULL)) {
+		if (!utf8_validate ((const char *)data, len)) {
 			g_debug ("received non-UTF8 close data: %d '%.*s' %d", (int)len, (int)len, (char *)data, (int)data[0]);
 			protocol_error_and_close (self);
 			return;
@@ -684,11 +828,17 @@ process_contents (SoupWebsocketConnection *self,
 		  gboolean control,
 		  gboolean fin,
 		  guint8 opcode,
-		  gconstpointer payload,
-		  gsize payload_len)
+		  GBytes *payload_data)
 {
 	SoupWebsocketConnectionPrivate *pv = self->pv;
 	GBytes *message;
+	gconstpointer payload;
+	gsize payload_len;
+
+	payload = g_bytes_get_data (payload_data, &payload_len);
+
+	if (pv->close_sent && pv->close_received)
+		return;
 
 	if (control) {
 		/* Control frames must never be fragmented */
@@ -774,9 +924,8 @@ process_contents (SoupWebsocketConnection *self,
 		/* Actually deliver the message? */
 		if (fin) {
 			if (pv->message_opcode == 0x01 &&
-			    !g_utf8_validate((char *)pv->message_data->data,
-			                     pv->message_data->len,
-			                     NULL)) {
+			    !utf8_validate((const char *)pv->message_data->data,
+					   pv->message_data->len)) {
 
 				g_debug ("received invalid non-UTF8 text data");
 
@@ -820,6 +969,9 @@ process_frame (SoupWebsocketConnection *self)
 	guint8 opcode;
 	gsize len;
 	gsize at;
+	GBytes *filtered_bytes;
+	GList *l;
+	GError *error = NULL;
 
 	len = self->pv->incoming->len;
 	if (len < 2)
@@ -831,20 +983,46 @@ process_frame (SoupWebsocketConnection *self)
 	opcode = header[0] & 0x0f;
 	masked = ((header[1] & 0x80) != 0);
 
-	/* We do not support extensions, reserved bits must be 0 */
-	if (header[0] & 0x70) {
+	if (self->pv->connection_type == SOUP_WEBSOCKET_CONNECTION_CLIENT && masked) {
+		/* A server MUST NOT mask any frames that it sends to the client.
+		 * A client MUST close a connection if it detects a masked frame.
+		 */
+		g_debug ("A server must not mask any frames that it sends to the client.");
 		protocol_error_and_close (self);
+		return FALSE;
 	}
+
+	if (self->pv->connection_type == SOUP_WEBSOCKET_CONNECTION_SERVER && !masked) {
+		/* The server MUST close the connection upon receiving a frame
+		 * that is not masked.
+		 */
+		g_debug ("The client should always mask frames");
+		protocol_error_and_close (self);
+                return FALSE;
+        }
 
 	switch (header[1] & 0x7f) {
 	case 126:
+		/* If 126, the following 2 bytes interpreted as a 16-bit
+		 * unsigned integer are the payload length.
+		 */
 		at = 4;
 		if (len < at)
 			return FALSE; /* need more data */
 		payload_len = (((guint16)header[2] << 8) |
 			       ((guint16)header[3] << 0));
+
+		/* The minimal number of bytes MUST be used to encode the length. */
+		if (payload_len <= 125) {
+			protocol_error_and_close (self);
+			return FALSE;
+		}
 		break;
 	case 127:
+		/* If 127, the following 8 bytes interpreted as a 64-bit
+		 * unsigned integer (the most significant bit MUST be 0)
+		 * are the payload length.
+		 */
 		at = 10;
 		if (len < at)
 			return FALSE; /* need more data */
@@ -856,6 +1034,12 @@ process_frame (SoupWebsocketConnection *self)
 			       ((guint64)header[7] << 16) |
 			       ((guint64)header[8] << 8) |
 			       ((guint64)header[9] << 0));
+
+		/* The minimal number of bytes MUST be used to encode the length. */
+		if (payload_len <= G_MAXUINT16) {
+			protocol_error_and_close (self);
+			return FALSE;
+		}
 		break;
 	default:
 		payload_len = header[1] & 0x7f;
@@ -886,13 +1070,35 @@ process_frame (SoupWebsocketConnection *self)
 		xor_with_mask (mask, payload, payload_len);
 	}
 
+	filtered_bytes = g_bytes_new_static (payload, payload_len);
+	for (l = self->pv->extensions; l != NULL; l = g_list_next (l)) {
+		SoupWebsocketExtension *extension;
+
+		extension = (SoupWebsocketExtension *)l->data;
+		filtered_bytes = soup_websocket_extension_process_incoming_message (extension, self->pv->incoming->data, filtered_bytes, &error);
+		if (error) {
+			emit_error_and_close (self, error, FALSE);
+			return FALSE;
+		}
+	}
+
+	/* After being processed by extensions reserved bits must be 0 */
+	if (header[0] & 0x70) {
+		protocol_error_and_close (self);
+		g_bytes_unref (filtered_bytes);
+
+		return FALSE;
+	}
+
 	/* Note that now that we've unmasked, we've modified the buffer, we can
 	 * only return below via discarding or processing the message
 	 */
-	process_contents (self, control, fin, opcode, payload, payload_len);
+	process_contents (self, control, fin, opcode, filtered_bytes);
+	g_bytes_unref (filtered_bytes);
 
 	/* Move past the parsed frame */
 	g_byte_array_remove_range (self->pv->incoming, 0, at + payload_len);
+
 	return TRUE;
 }
 
@@ -903,32 +1109,31 @@ process_incoming (SoupWebsocketConnection *self)
 		;
 }
 
-static gboolean
-on_web_socket_input (GObject *pollable_stream,
-		     gpointer user_data)
+static void
+soup_websocket_connection_read (SoupWebsocketConnection *self)
 {
-	SoupWebsocketConnection *self = SOUP_WEBSOCKET_CONNECTION (user_data);
 	SoupWebsocketConnectionPrivate *pv = self->pv;
 	GError *error = NULL;
 	gboolean end = FALSE;
 	gssize count;
 	gsize len;
 
+	soup_websocket_connection_stop_input_source (self);
+
 	do {
 		len = pv->incoming->len;
-		g_byte_array_set_size (pv->incoming, len + 1024);
+		g_byte_array_set_size (pv->incoming, len + READ_BUFFER_SIZE);
 
 		count = g_pollable_input_stream_read_nonblocking (pv->input,
 								  pv->incoming->data + len,
-								  1024, NULL, &error);
-
+								  READ_BUFFER_SIZE, NULL, &error);
 		if (count < 0) {
 			if (g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK)) {
 				g_error_free (error);
 				count = 0;
 			} else {
 				emit_error_and_close (self, error, TRUE);
-				return TRUE;
+				return;
 			}
 		} else if (count == 0) {
 			end = TRUE;
@@ -948,16 +1153,25 @@ on_web_socket_input (GObject *pollable_stream,
 		}
 
 		close_io_stream (self);
+		return;
 	}
 
-	return TRUE;
+	if (!pv->io_closing)
+		soup_websocket_connection_start_input_source (self);
 }
 
 static gboolean
-on_web_socket_output (GObject *pollable_stream,
-		      gpointer user_data)
+on_web_socket_input (GObject *pollable_stream,
+		     gpointer user_data)
 {
-	SoupWebsocketConnection *self = SOUP_WEBSOCKET_CONNECTION (user_data);
+	soup_websocket_connection_read (SOUP_WEBSOCKET_CONNECTION (user_data));
+
+	return G_SOURCE_REMOVE;
+}
+
+static void
+soup_websocket_connection_write (SoupWebsocketConnection *self)
+{
 	SoupWebsocketConnectionPrivate *pv = self->pv;
 	const guint8 *data;
 	GError *error = NULL;
@@ -965,19 +1179,18 @@ on_web_socket_output (GObject *pollable_stream,
 	gssize count;
 	gsize len;
 
+	soup_websocket_connection_stop_output_source (self);
+
 	if (soup_websocket_connection_get_state (self) == SOUP_WEBSOCKET_STATE_CLOSED) {
 		g_debug ("Ignoring message since the connection is closed");
-		stop_output (self);
-		return TRUE;
+		return;
 	}
 
 	frame = g_queue_peek_head (&pv->outgoing);
 
 	/* No more frames to send */
-	if (frame == NULL) {
-		stop_output (self);
-		return TRUE;
-	}
+	if (frame == NULL)
+		return;
 
 	data = g_bytes_get_data (frame->data, &len);
 	g_assert (len > 0);
@@ -997,7 +1210,7 @@ on_web_socket_output (GObject *pollable_stream,
 			frame->pending = TRUE;
 		} else {
 			emit_error_and_close (self, error, TRUE);
-			return FALSE;
+			return;
 		}
 	}
 
@@ -1015,23 +1228,21 @@ on_web_socket_output (GObject *pollable_stream,
 			}
 		}
 		frame_free (frame);
+
+		if (g_queue_is_empty (&pv->outgoing))
+			return;
 	}
 
-	return TRUE;
+	soup_websocket_connection_start_output_source (self);
 }
 
-static void
-start_output (SoupWebsocketConnection *self)
+static gboolean
+on_web_socket_output (GObject *pollable_stream,
+		      gpointer user_data)
 {
-	SoupWebsocketConnectionPrivate *pv = self->pv;
+	soup_websocket_connection_write (SOUP_WEBSOCKET_CONNECTION (user_data));
 
-	if (pv->output_source)
-		return;
-
-	g_debug ("starting output source");
-	pv->output_source = g_pollable_output_stream_create_source (pv->output, NULL);
-	g_source_set_callback (pv->output_source, (GSourceFunc)on_web_socket_output, self, NULL);
-	g_source_attach (pv->output_source, pv->main_context);
+	return G_SOURCE_REMOVE;
 }
 
 static void
@@ -1072,7 +1283,7 @@ queue_frame (SoupWebsocketConnection *self,
 		g_queue_push_tail (&pv->outgoing, frame);
 	}
 
-	start_output (self);
+	soup_websocket_connection_write (self);
 }
 
 static void
@@ -1097,9 +1308,7 @@ soup_websocket_connection_constructed (GObject *object)
 	pv->output = G_POLLABLE_OUTPUT_STREAM (os);
 	g_return_if_fail (g_pollable_output_stream_can_poll (pv->output));
 
-	pv->input_source = g_pollable_input_stream_create_source (pv->input, NULL);
-	g_source_set_callback (pv->input_source, (GSourceFunc)on_web_socket_input, self, NULL);
-	g_source_attach (pv->input_source, pv->main_context);
+	soup_websocket_connection_start_input_source (self);
 }
 
 static void
@@ -1142,6 +1351,10 @@ soup_websocket_connection_get_property (GObject *object,
 
 	case PROP_KEEPALIVE_INTERVAL:
 		g_value_set_uint (value, pv->keepalive_interval);
+		break;
+
+	case PROP_EXTENSIONS:
+		g_value_set_pointer (value, pv->extensions);
 		break;
 
 	default:
@@ -1193,6 +1406,10 @@ soup_websocket_connection_set_property (GObject *object,
 		                                                  g_value_get_uint (value));
 		break;
 
+	case PROP_EXTENSIONS:
+		pv->extensions = g_value_get_pointer (value);
+		break;
+
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 		break;
@@ -1240,6 +1457,8 @@ soup_websocket_connection_finalize (GObject *object)
 		soup_uri_free (pv->uri);
 	g_free (pv->origin);
 	g_free (pv->protocol);
+
+	g_list_free_full (pv->extensions, g_object_unref);
 
 	G_OBJECT_CLASS (soup_websocket_connection_parent_class)->finalize (object);
 }
@@ -1398,6 +1617,21 @@ soup_websocket_connection_class_init (SoupWebsocketConnectionClass *klass)
 					                    G_PARAM_CONSTRUCT |
 					                    G_PARAM_STATIC_STRINGS));
 
+        /**
+         * SoupWebsocketConnection:extensions:
+         *
+         * List of #SoupWebsocketExtension objects that are active in the connection.
+         *
+         * Since: 2.68
+         */
+        g_object_class_install_property (gobject_class, PROP_EXTENSIONS,
+                                         g_param_spec_pointer ("extensions",
+                                                               "Active extensions",
+                                                               "The list of active extensions",
+                                                               G_PARAM_READWRITE |
+                                                               G_PARAM_CONSTRUCT_ONLY |
+                                                               G_PARAM_STATIC_STRINGS));
+
 	/**
 	 * SoupWebsocketConnection::message:
 	 * @self: the WebSocket
@@ -1517,17 +1751,46 @@ soup_websocket_connection_new (GIOStream                    *stream,
 			       const char                   *origin,
 			       const char                   *protocol)
 {
-	g_return_val_if_fail (G_IS_IO_STREAM (stream), NULL);
-	g_return_val_if_fail (uri != NULL, NULL);
-	g_return_val_if_fail (type != SOUP_WEBSOCKET_CONNECTION_UNKNOWN, NULL);
+	return soup_websocket_connection_new_with_extensions (stream, uri, type, origin, protocol, NULL);
+}
 
-	return g_object_new (SOUP_TYPE_WEBSOCKET_CONNECTION,
-			     "io-stream", stream,
-			     "uri", uri,
-			     "connection-type", type,
-			     "origin", origin,
-			     "protocol", protocol,
-			     NULL);
+/**
+ * soup_websocket_connection_new_with_extensions:
+ * @stream: a #GIOStream connected to the WebSocket server
+ * @uri: the URI of the connection
+ * @type: the type of connection (client/side)
+ * @origin: (allow-none): the Origin of the client
+ * @protocol: (allow-none): the subprotocol in use
+ * @extensions: (element-type SoupWebsocketExtension) (transfer full): a #GList of #SoupWebsocketExtension objects
+ *
+ * Creates a #SoupWebsocketConnection on @stream with the given active @extensions.
+ * This should be called after completing the handshake to begin using the WebSocket
+ * protocol.
+ *
+ * Returns: a new #SoupWebsocketConnection
+ *
+ * Since: 2.68
+ */
+SoupWebsocketConnection *
+soup_websocket_connection_new_with_extensions (GIOStream                    *stream,
+                                               SoupURI                      *uri,
+                                               SoupWebsocketConnectionType   type,
+                                               const char                   *origin,
+                                               const char                   *protocol,
+                                               GList                        *extensions)
+{
+        g_return_val_if_fail (G_IS_IO_STREAM (stream), NULL);
+        g_return_val_if_fail (uri != NULL, NULL);
+        g_return_val_if_fail (type != SOUP_WEBSOCKET_CONNECTION_UNKNOWN, NULL);
+
+        return g_object_new (SOUP_TYPE_WEBSOCKET_CONNECTION,
+                             "io-stream", stream,
+                             "uri", uri,
+                             "connection-type", type,
+                             "origin", origin,
+                             "protocol", protocol,
+                             "extensions", extensions,
+                             NULL);
 }
 
 /**
@@ -1624,6 +1887,24 @@ soup_websocket_connection_get_protocol (SoupWebsocketConnection *self)
 }
 
 /**
+ * soup_websocket_connection_get_extensions:
+ * @self: the WebSocket
+ *
+ * Get the extensions chosen via negotiation with the peer.
+ *
+ * Returns: (element-type SoupWebsocketExtension) (transfer none): a #GList of #SoupWebsocketExtension objects
+ *
+ * Since: 2.68
+ */
+GList *
+soup_websocket_connection_get_extensions (SoupWebsocketConnection *self)
+{
+        g_return_val_if_fail (SOUP_IS_WEBSOCKET_CONNECTION (self), NULL);
+
+        return self->pv->extensions;
+}
+
+/**
  * soup_websocket_connection_get_state:
  * @self: the WebSocket
  *
@@ -1696,7 +1977,9 @@ soup_websocket_connection_get_close_data (SoupWebsocketConnection *self)
  * @self: the WebSocket
  * @text: the message contents
  *
- * Send a text (UTF-8) message to the peer.
+ * Send a %NULL-terminated text (UTF-8) message to the peer. If you need
+ * to send text messages containing %NULL characters use
+ * soup_websocket_connection_send_message() instead.
  *
  * The message is queued to be sent and will be sent when the main loop
  * is run.
@@ -1714,7 +1997,7 @@ soup_websocket_connection_send_text (SoupWebsocketConnection *self,
 	g_return_if_fail (text != NULL);
 
 	length = strlen (text);
-	g_return_if_fail (g_utf8_validate (text, length, NULL));
+        g_return_if_fail (utf8_validate (text, length));
 
 	send_message (self, SOUP_WEBSOCKET_QUEUE_NORMAL, 0x01, (const guint8 *) text, length);
 }
@@ -1722,10 +2005,10 @@ soup_websocket_connection_send_text (SoupWebsocketConnection *self,
 /**
  * soup_websocket_connection_send_binary:
  * @self: the WebSocket
- * @data: (array length=length) (element-type guint8): the message contents
+ * @data: (array length=length) (element-type guint8) (nullable): the message contents
  * @length: the length of @data
  *
- * Send a binary message to the peer.
+ * Send a binary message to the peer. If @length is 0, @data may be %NULL.
  *
  * The message is queued to be sent and will be sent when the main loop
  * is run.
@@ -1739,9 +2022,41 @@ soup_websocket_connection_send_binary (SoupWebsocketConnection *self,
 {
 	g_return_if_fail (SOUP_IS_WEBSOCKET_CONNECTION (self));
 	g_return_if_fail (soup_websocket_connection_get_state (self) == SOUP_WEBSOCKET_STATE_OPEN);
-	g_return_if_fail (data != NULL);
+	g_return_if_fail (data != NULL || length == 0);
 
 	send_message (self, SOUP_WEBSOCKET_QUEUE_NORMAL, 0x02, data, length);
+}
+
+/**
+ * soup_websocket_connection_send_message:
+ * @self: the WebSocket
+ * @type: the type of message contents
+ * @message: the message data as #GBytes
+ *
+ * Send a message of the given @type to the peer. Note that this method,
+ * allows to send text messages containing %NULL characters.
+ *
+ * The message is queued to be sent and will be sent when the main loop
+ * is run.
+ *
+ * Since: 2.68
+ */
+void
+soup_websocket_connection_send_message (SoupWebsocketConnection *self,
+                                        SoupWebsocketDataType type,
+                                        GBytes *message)
+{
+        gconstpointer data;
+        gsize length;
+
+        g_return_if_fail (SOUP_IS_WEBSOCKET_CONNECTION (self));
+        g_return_if_fail (soup_websocket_connection_get_state (self) == SOUP_WEBSOCKET_STATE_OPEN);
+        g_return_if_fail (message != NULL);
+
+        data = g_bytes_get_data (message, &length);
+        g_return_if_fail (type != SOUP_WEBSOCKET_DATA_TEXT || utf8_validate ((const char *)data, length));
+
+        send_message (self, SOUP_WEBSOCKET_QUEUE_NORMAL, (int)type, data, length);
 }
 
 /**
@@ -1757,6 +2072,8 @@ soup_websocket_connection_send_binary (SoupWebsocketConnection *self,
  * main loop runs.
  *
  * The @code and @data are sent to the peer along with the close request.
+ * If @code is %SOUP_WEBSOCKET_CLOSE_NO_STATUS a close message with no body
+ * (without code and data) is sent.
  * Note that the @data must be UTF-8 valid.
  *
  * Since: 2.50
@@ -1772,8 +2089,7 @@ soup_websocket_connection_close (SoupWebsocketConnection *self,
 	pv = self->pv;
 	g_return_if_fail (!pv->close_sent);
 
-	g_return_if_fail (code != SOUP_WEBSOCKET_CLOSE_NO_STATUS &&
-			  code != SOUP_WEBSOCKET_CLOSE_ABNORMAL &&
+	g_return_if_fail (code != SOUP_WEBSOCKET_CLOSE_ABNORMAL &&
 			  code != SOUP_WEBSOCKET_CLOSE_TLS_HANDSHAKE);
 	if (pv->connection_type == SOUP_WEBSOCKET_CONNECTION_SERVER)
 		g_return_if_fail (code != SOUP_WEBSOCKET_CLOSE_NO_EXTENSION);

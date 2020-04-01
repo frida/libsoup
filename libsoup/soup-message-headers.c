@@ -308,7 +308,7 @@ soup_message_headers_remove (SoupMessageHeaders *hdrs, const char *name)
 /**
  * soup_message_headers_get_one:
  * @hdrs: a #SoupMessageHeaders
- * @name: header name
+ * @name: (in): header name
  * 
  * Gets the value of header @name in @hdrs. Use this for headers whose
  * values are <emphasis>not</emphasis> comma-delimited lists, and
@@ -320,7 +320,7 @@ soup_message_headers_remove (SoupMessageHeaders *hdrs, const char *name)
  * whichever one makes libsoup most compatible with other HTTP
  * implementations.)
  *
- * Return value: (nullable): the header's value or %NULL if not found.
+ * Return value: (nullable) (transfer none): the header's value or %NULL if not found.
  *
  * Since: 2.28
  **/
@@ -411,7 +411,7 @@ soup_message_headers_header_equals (SoupMessageHeaders *hdrs, const char *name, 
  * transformation is allowed, and so an upstream proxy could do the
  * same thing.
  * 
- * Return value: (nullable): the header's value or %NULL if not found.
+ * Return value: (nullable) (transfer none): the header's value or %NULL if not found.
  *
  * Since: 2.28
  **/
@@ -664,9 +664,15 @@ static void
 transfer_encoding_setter (SoupMessageHeaders *hdrs, const char *value)
 {
 	if (value) {
+		/* "identity" is a wrong value according to RFC errata 408,
+		 * and RFC 7230 does not list it as valid transfer-coding.
+		 * Nevertheless, the obsolete RFC 2616 stated "identity"
+		 * as valid, so we can't handle it as unrecognized here
+		 * for compatibility reasons.
+		 */
 		if (g_ascii_strcasecmp (value, "chunked") == 0)
 			hdrs->encoding = SOUP_ENCODING_CHUNKED;
-		else
+		else if (g_ascii_strcasecmp (value, "identity") != 0)
 			hdrs->encoding = SOUP_ENCODING_UNRECOGNIZED;
 	} else
 		hdrs->encoding = -1;
