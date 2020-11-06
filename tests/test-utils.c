@@ -131,6 +131,19 @@ debug_printf (int level, const char *format, ...)
 	va_end (args);
 }
 
+gboolean
+have_curl(void) {
+	char *found;
+
+	found = g_find_program_in_path ("curl");
+	if (found) {
+		g_free (found);
+		return TRUE;
+	} else {
+		return FALSE;
+	}
+}
+
 #ifdef HAVE_APACHE
 
 static gboolean
@@ -145,6 +158,13 @@ apache_cmd (const char *cmd)
 	gboolean ok;
 
 	server_root = g_test_build_filename (G_TEST_BUILT, "", NULL);
+	if (!g_path_is_absolute (server_root)) {
+		char *abs_server_root;
+
+		abs_server_root = g_canonicalize_filename (server_root, NULL);
+		g_free (server_root);
+		server_root = abs_server_root;
+	}
 
 	cwd = g_get_current_dir ();
 #ifdef HAVE_APACHE_2_4

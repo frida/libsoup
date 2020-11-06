@@ -1,6 +1,13 @@
 pkg = import('pkgconfig')
 
+resources = gnome.compile_resources('soup-resources',
+    'soup.gresource.xml',
+    c_name: 'soup',
+    source_dir: '.'
+)
+
 soup_sources = [
+  resources,
   'soup-address.c',
   'soup-auth.c',
   'soup-auth-basic.c',
@@ -235,6 +242,7 @@ libsoup_c_args  = [
 ]
 
 deps = [
+  libsysprof_capture_dep,
   glib_deps,
   libxml_dep,
   sqlite_dep,

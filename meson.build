@@ -1,8 +1,8 @@
 project('libsoup', 'c',
-        version: '2.70.0',
+        version: '2.72.0',
         meson_version : '>=0.50',
         license : 'LGPL2',
-        default_options : 'c_std=gnu89')
+        default_options : 'c_std=c99')
 
 gnome = import('gnome')
 
@@ -20,7 +20,7 @@ soup_version_micro = version_arr[2]
 #
 # When bumping the first component version, set the second and third components
 # to 0. When bumping the second version, set the third one to zero.
-libversion = '1.9.0'
+libversion = '1.11.0'
 apiversion = '2.4'
 soversion = libversion.split('.')[0]
 libsoup_api_name = '@0@-@1@'.format(meson.project_name(), apiversion)
@@ -47,15 +47,6 @@ endif
 common_flags = [
   '-DHAVE_CONFIG_H',
 ]
-
-ndebug = get_option('b_ndebug')
-if ndebug == 'true' or (ndebug == 'if-release' and not get_option('debug'))
-  common_flags += [
-    '-DG_DISABLE_CAST_CHECKS',
-    '-DG_DISABLE_ASSERT',
-    '-DG_DISABLE_CHECKS',
-  ]
-endif
 
 cc = meson.get_compiler('c')
 # Enable extra warnings if compiler supports them.
@@ -104,7 +95,7 @@ sqlite_dep = dependency('sqlite3', required: false)
 # Fallback check for sqlite, not all platforms ship pkg-config file
 if not sqlite_dep.found()
   sqlite_dep = cc.find_library('sqlite3',
-    has_headers : ['sqlite3.h', 'sqlite3ext.h'],
+    has_headers : ['sqlite3.h'],
     required: false)
 endif
 
@@ -159,6 +150,22 @@ libpsl_dep = dependency('libpsl', version : libpsl_required_version,
 if cc.has_function('gmtime_r', prefix : '#include <time.h>', args : default_source_flag)
     cdata.set('HAVE_GMTIME_R', '1')
 endif
+
+# sysprof support
+libsysprof_capture_dep = dependency('sysprof-capture-4',
+  required: get_option('sysprof'),
+  default_options: [
+    'enable_examples=false',
+    'enable_gtk=false',
+    'enable_tests=false',
+    'enable_tools=false',
+    'libsysprof=false',
+    'with_sysprofd=none',
+    'help=false',
+  ],
+  fallback: ['sysprof', 'libsysprof_capture_dep'],
+)
+cdata.set('HAVE_SYSPROF', libsysprof_capture_dep.found())
 
 ###################
 # GIO TLS support #
@@ -288,8 +295,6 @@ tests_ready = have_apache and have_php and have_php_xmlrpc
 if not tests_ready
   warning('Some regression tests will not be compiled due to missing libraries or modules. Please check the logs for more details.')
 endif
-
-cdata.set('HAVE_CURL', find_program('curl', required : false).found())
 
 ##################
 # GSSAPI support #

@@ -685,6 +685,7 @@ soup_session_set_property (GObject *object, guint prop_id,
 		socket_props_changed = TRUE;
 		break;
 	case PROP_TLS_INTERACTION:
+		g_clear_object(&priv->tls_interaction);
 		priv->tls_interaction = g_value_dup_object (value);
 		socket_props_changed = TRUE;
 		break;
@@ -1075,6 +1076,7 @@ auth_manager_authenticate (SoupAuthManager *manager, SoupMessage *msg,
 
 #define SOUP_SESSION_WOULD_REDIRECT_AS_SAFE(session, msg) \
 	(((msg)->status_code == SOUP_STATUS_MOVED_PERMANENTLY || \
+	  (msg)->status_code == SOUP_STATUS_PERMANENT_REDIRECT || \
 	  (msg)->status_code == SOUP_STATUS_TEMPORARY_REDIRECT || \
 	  (msg)->status_code == SOUP_STATUS_FOUND) && \
 	 SOUP_METHOD_IS_SAFE ((msg)->method))
@@ -2877,8 +2879,21 @@ soup_session_has_feature (SoupSession *session,
 				return TRUE;
 		}
 	} else if (g_type_is_a (feature_type, SOUP_TYPE_REQUEST)) {
-		return g_hash_table_lookup (priv->request_types,
-					    GSIZE_TO_POINTER (feature_type)) != NULL;
+		SoupRequestClass *request_class;
+		int i;
+
+		request_class = g_type_class_peek (feature_type);
+		if (!request_class)
+			return FALSE;
+
+		for (i = 0; request_class->schemes[i]; i++) {
+			gpointer type;
+
+			type = g_hash_table_lookup (priv->request_types,
+						    request_class->schemes[i]);
+			if (type && g_type_is_a (GPOINTER_TO_SIZE (type), feature_type))
+				return TRUE;
+		}
 	} else {
 		for (f = priv->features; f; f = f->next) {
 			if (soup_session_feature_has_feature (f->data, feature_type))
@@ -3929,7 +3944,8 @@ async_send_request_restarted (SoupMessage *msg, gpointer user_data)
 	SoupMessageQueueItem *item = user_data;
 
 	/* We won't be needing this, then. */
-	g_object_set_data (G_OBJECT (item->msg), "SoupSession:ostream", NULL);
+	if (item->task)
+		g_object_set_data (G_OBJECT (item->task), "SoupSession:ostream", NULL);
 	item->io_started = FALSE;
 }
 

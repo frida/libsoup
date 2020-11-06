@@ -1,3 +1,36 @@
+Changes in libsoup from 2.71.1 to 2.72.0:
+
+	* Fix critical after cancelling a message that failed auth [Carlos Garcia Campos]
+
+	* Updated translations: Portuguese, Latvian, Italian, German, Hungarian
+
+Changes in libsoup from 2.71.0 to 2.71.1:
+
+	* Add support for 308 Premanent Redirect [Benjamin Kaufmann]
+
+	* Add basic sysprof profiling for HTTP messages [Philip Withnall]
+
+	* Various build fixes [Tom Schoonjans, Chun-wei Fan]
+
+	* Updated translations: Korean, Finnish, Czech, Catalan, Croatian, Slovenian,
+	                        Japanese, Serbian, Galician, Basque, Trukish, Indonesian,
+							Friulian
+
+Changes in libsoup from 2.70.0 to 2.71.0:
+
+	* Redesign directory list returned for `file://` requests [Jan-Michael Brummer]
+
+	* Add `SOUP_COOKIE_JAR_ACCEPT_GRANDFATHERED_THIRD_PARTY` policy [Carlos Garcia Campos]
+
+	* Add soup_message_is_feature_disabled() API [Carlos Garcia Campos]
+
+	* Fix potential leak when setting SoupSession:tls-interaction [Scott Hutton]
+
+	* Fix building with Visual Studio [Chun-wei Fan]
+
+	* Updated translations: Ukrainian, Romanian, Swedish, Polish, Lithuanian, Spanish,
+	                        French, Chinese (China)
+
 Changes in libsoup from 2.69.90 to 2.70.0:
 
 	* Deprecate SoupSession:proxy-uri [Patrick Griffis]
