@@ -553,6 +553,11 @@ soup_address_get_physical (SoupAddress *addr)
 	if (!priv->physical) {
 		GInetAddress *gia;
 
+		if (SOUP_ADDRESS_GET_FAMILY (priv) == SOUP_ADDRESS_FAMILY_UNIX) {
+			priv->physical = g_strdup ("UNIX");
+			return priv->physical;
+		}
+
 		gia = soup_address_make_inet_address (addr);
 		priv->physical = g_inet_address_to_string (gia);
 		g_object_unref (gia);
