@@ -324,7 +324,6 @@ soup_date_time_new_from_http_string (const char *date_string)
          * catch those in case for testing.
          */
 	if (G_UNLIKELY (g_ascii_isdigit (*date_string) && !strpbrk (date_string, "JFMASOND"))) {
-                g_debug ("Unsupported format passed to soup_date_time_new_from_http_string(): %s", date_string);
                 return NULL;
         }
 

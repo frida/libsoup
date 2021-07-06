@@ -536,7 +536,6 @@ on_header_callback (nghttp2_session     *session,
                         data->io->in_callback--;
                         return 0;
                 }
-                g_debug ("Unknown header: %s = %s", name, value);
                 data->io->in_callback--;
                 return 0;
         }

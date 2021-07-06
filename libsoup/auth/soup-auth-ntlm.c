@@ -522,8 +522,6 @@ soup_auth_ntlm_get_connection_authorization (SoupConnectionAuth *auth,
 					header = NULL;
 					priv->sso_available = FALSE;
 				}
-			} else {
-				g_debug ("NTLM single-sign-on using %s failed", NTLM_AUTH);
 			}
 		}
 		/* If NTLM single-sign-on fails, go back to original
@@ -562,7 +560,6 @@ soup_auth_ntlm_get_connection_authorization (SoupConnectionAuth *auth,
 #ifdef USE_NTLM_AUTH
 	case SOUP_NTLM_SSO_FAILED:
 		/* Restart request without SSO */
-		g_debug ("NTLM single-sign-on by using %s failed", NTLM_AUTH);
 		priv->sso_available = FALSE;
 		header = soup_ntlm_request ();
 		conn->state = SOUP_NTLM_SENT_REQUEST;

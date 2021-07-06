@@ -553,8 +553,6 @@ on_header_callback (nghttp2_session     *session,
                         msg_io->authority = g_strndup ((char *)value, valuelen);
                 else if (strcmp ((char *)name, ":path") == 0)
                         msg_io->path = g_strndup ((char *)value, valuelen);
-                else
-                        g_debug ("Unknown header: %s = %s", name, value);
                 io->in_callback--;
                 return 0;
         }
