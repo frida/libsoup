@@ -11,8 +11,6 @@
                 int return_code = stm;                                                           \
                 if (return_code == NGHTTP2_ERR_NOMEM)                                            \
                         g_abort ();                                                              \
-                else if (return_code < 0)                                                        \
-                        g_debug ("Unhandled NGHTTP2 Error: %s", nghttp2_strerror (return_code)); \
         } G_STMT_END
 
 #define MAKE_NV(NAME, VALUE, VALUELEN)                                                           \
