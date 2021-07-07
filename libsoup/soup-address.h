@@ -34,12 +34,13 @@ typedef struct {
 	void (*_libsoup_reserved4) (void);
 } SoupAddressClass;
 
-#define SOUP_ADDRESS_NAME     "name"
-#define SOUP_ADDRESS_FAMILY   "family"
-#define SOUP_ADDRESS_PORT     "port"
-#define SOUP_ADDRESS_PROTOCOL "protocol"
-#define SOUP_ADDRESS_PHYSICAL "physical"
-#define SOUP_ADDRESS_SOCKADDR "sockaddr"
+#define SOUP_ADDRESS_NAME      "name"
+#define SOUP_ADDRESS_FAMILY    "family"
+#define SOUP_ADDRESS_PORT      "port"
+#define SOUP_ADDRESS_PROTOCOL  "protocol"
+#define SOUP_ADDRESS_PHYSICAL  "physical"
+#define SOUP_ADDRESS_SOCKADDR  "sockaddr"
+#define SOUP_ADDRESS_GSOCKADDR "gsockaddr"
 
 typedef enum {
 	SOUP_ADDRESS_FAMILY_INVALID = -1,
