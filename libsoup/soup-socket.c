@@ -19,6 +19,7 @@
 #include "soup.h"
 #include "soup-filter-input-stream.h"
 #include "soup-io-stream.h"
+#include "soup-misc-private.h"
 
 /**
  * SECTION:soup-socket
@@ -1292,6 +1293,7 @@ soup_socket_listen_full (SoupSocket *sock,
 {
 	SoupSocketPrivate *priv;
 	GSocketAddress *addr;
+	GSocketFamily family;
 
 	g_return_val_if_fail (SOUP_IS_SOCKET (sock), FALSE);
 	priv = soup_socket_get_instance_private (sock);
@@ -1307,7 +1309,9 @@ soup_socket_listen_full (SoupSocket *sock,
 	addr = soup_address_get_gsockaddr (priv->local_addr);
 	g_return_val_if_fail (addr != NULL, FALSE);
 
-	priv->gsock = g_socket_new (g_socket_address_get_family (addr),
+	family = g_socket_address_get_family (addr);
+
+	priv->gsock = g_socket_new (family,
 				    G_SOCKET_TYPE_STREAM,
 				    G_SOCKET_PROTOCOL_DEFAULT,
 				    error);
@@ -1316,7 +1320,7 @@ soup_socket_listen_full (SoupSocket *sock,
 	finish_socket_setup (sock);
 
 #if defined (IPPROTO_IPV6) && defined (IPV6_V6ONLY)
-	if (priv->ipv6_only) {
+	if (family != G_SOCKET_FAMILY_UNIX && priv->ipv6_only) {
 		int fd, v6_only;
 
 		fd = g_socket_get_fd (priv->gsock);
@@ -1673,8 +1677,6 @@ soup_socket_get_local_address (SoupSocket *sock)
 	g_mutex_lock (&priv->addrlock);
 	if (!priv->local_addr) {
 		GSocketAddress *addr;
-		struct sockaddr_storage sa;
-		gssize sa_len;
 		GError *error = NULL;
 
 		if (priv->gsock == NULL) {
@@ -1688,9 +1690,7 @@ soup_socket_get_local_address (SoupSocket *sock)
 			g_error_free (error);
 			goto unlock;
 		}
-		sa_len = g_socket_address_get_native_size (addr);
-		g_socket_address_to_native (addr, &sa, sa_len, NULL);
-		priv->local_addr = soup_address_new_from_sockaddr ((struct sockaddr *)&sa, sa_len);
+		priv->local_addr = soup_address_new_from_gsockaddr (addr);
 		g_object_unref (addr);
 	}
 unlock:
@@ -1721,8 +1721,6 @@ soup_socket_get_remote_address (SoupSocket *sock)
 	g_mutex_lock (&priv->addrlock);
 	if (!priv->remote_addr) {
 		GSocketAddress *addr;
-		struct sockaddr_storage sa;
-		gssize sa_len;
 		GError *error = NULL;
 
 		if (priv->gsock == NULL) {
@@ -1736,9 +1734,7 @@ soup_socket_get_remote_address (SoupSocket *sock)
 			g_error_free (error);
 			goto unlock;
 		}
-		sa_len = g_socket_address_get_native_size (addr);
-		g_socket_address_to_native (addr, &sa, sa_len, NULL);
-		priv->remote_addr = soup_address_new_from_sockaddr ((struct sockaddr *)&sa, sa_len);
+		priv->remote_addr = soup_address_new_from_gsockaddr (addr);
 		g_object_unref (addr);
 	}
 unlock:
