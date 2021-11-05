@@ -1,8 +1,8 @@
 project('libsoup', 'c',
-        version: '2.72.0',
+        version: '2.74.1',
         meson_version : '>=0.50',
         license : 'LGPL2',
-        default_options : 'c_std=gnu99')
+        default_options : 'c_std=c99')
 
 gnome = import('gnome')
 
@@ -20,7 +20,7 @@ soup_version_micro = version_arr[2]
 #
 # When bumping the first component version, set the second and third components
 # to 0. When bumping the second version, set the third one to zero.
-libversion = '1.11.0'
+libversion = '1.11.1'
 apiversion = '2.4'
 soversion = libversion.split('.')[0]
 libsoup_api_name = '@0@-@1@'.format(meson.project_name(), apiversion)
@@ -47,15 +47,6 @@ endif
 common_flags = [
   '-DHAVE_CONFIG_H',
 ]
-
-ndebug = get_option('b_ndebug')
-if ndebug == 'true' or (ndebug == 'if-release' and not get_option('debug'))
-  common_flags += [
-    '-DG_DISABLE_CAST_CHECKS',
-    '-DG_DISABLE_ASSERT',
-    '-DG_DISABLE_CHECKS',
-  ]
-endif
 
 cc = meson.get_compiler('c')
 # Enable extra warnings if compiler supports them.
@@ -109,7 +100,8 @@ if not sqlite_dep.found()
 endif
 
 if not sqlite_dep.found()
-  sqlite_dep = subproject('sqlite').get_variable('sqlite_dep')
+  # Allows fallback to subproject
+  sqlite_dep = dependency('sqlite3')
 endif
 
 libxml_dep = dependency('libxml-2.0', required: false)
@@ -172,7 +164,9 @@ libsysprof_capture_dep = dependency('sysprof-capture-4',
     'with_sysprofd=none',
     'help=false',
   ],
-  fallback: ['sysprof', 'libsysprof_capture_dep'],
+  # sysprof doesn't support Windows, so don't fall back to the subproject which fails to build,
+  # instead let it fail here so that sysprof gets skipped
+  fallback: (host_system != 'windows') ? ['sysprof', 'libsysprof_capture_dep'] : [],
 )
 cdata.set('HAVE_SYSPROF', libsysprof_capture_dep.found())
 
@@ -316,12 +310,11 @@ if cc.get_id() == 'msvc'
   else
     gssapi_lib_type = '64'
   endif
-  gssapi_lib = cc.find_library('gssapi' + gssapi_lib_type,
+  gssapi_dep = cc.find_library('gssapi' + gssapi_lib_type,
     has_headers: 'gssapi/gssapi.h',
     required: gssapi_opt)
-  if gssapi_lib.found()
+  if gssapi_dep.found()
       enable_gssapi = true
-      add_project_link_arguments('gssapi@0@.lib'.format(gssapi_lib_type), language : 'c')
   endif
 else
   krb5_config_path = get_option('krb5_config')
@@ -334,9 +327,12 @@ else
     cflags_output = run_command (krb5_config, '--cflags', 'gssapi', check: gssapi_opt.enabled())
     if libs_output.returncode() == 0 and cflags_output.returncode() == 0
       enable_gssapi = true
-      add_project_link_arguments(libs_output.stdout().split(), language : 'c')
-      add_project_arguments(cflags_output.stdout().split(), language : 'c')
+      gssapi_dep = declare_dependency(
+        link_args: libs_output.stdout().split(),
+        compile_args: cflags_output.stdout().split())
     endif
+  else
+    gssapi_dep = dependency('', required: false)
   endif
 endif
 

@@ -39,14 +39,12 @@ enum {
 	PROP_PROTOCOL,
 	PROP_PHYSICAL,
 	PROP_SOCKADDR,
-	PROP_GSOCKADDR,
 
 	LAST_PROP
 };
 
 typedef struct {
 	struct sockaddr_storage *sockaddr;
-	gsize sockaddr_size;
 	int n_addrs, offset;
 
 	char *name, *physical;
@@ -156,7 +154,6 @@ soup_address_set_property (GObject *object, guint prop_id,
 	SoupAddressFamily family;
 	struct sockaddr *sa;
 	int len, port;
-	GSocketAddress *addr;
 
 	/* This is a mess because the properties are mostly orthogonal,
 	 * but g_object_constructor wants to set a default value for each
@@ -207,24 +204,6 @@ soup_address_set_property (GObject *object, guint prop_id,
 		priv->n_addrs = 1;
 		priv->port = ntohs (SOUP_ADDRESS_GET_PORT (priv));
 		break;
-
-	case PROP_GSOCKADDR:
-		addr = g_value_get_object (value);
-		if (!addr)
-			return;
-		g_return_if_fail (priv->sockaddr == NULL);
-
-		priv->sockaddr_size = g_socket_address_get_native_size (addr);
-		priv->sockaddr = g_malloc (priv->sockaddr_size);
-		g_socket_address_to_native (addr, priv->sockaddr,
-					    priv->sockaddr_size, NULL);
-		priv->n_addrs = 1;
-		if (g_socket_address_get_family (addr) != G_SOCKET_FAMILY_UNIX)
-			priv->port = ntohs (SOUP_ADDRESS_GET_PORT (priv));
-		else
-			priv->port = 0;
-		break;
-
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 		break;
@@ -361,20 +340,6 @@ soup_address_class_init (SoupAddressClass *address_class)
 				      "struct sockaddr for this address",
 				      G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
 				      G_PARAM_STATIC_STRINGS));
-	/**
-	 * SOUP_ADDRESS_GSOCKADDR:
-	 *
-	 * A write-only property to be able to safely construct a
-	 * SoupAddress from any GSocketAddress.
-	 **/
-	g_object_class_install_property (
-		object_class, PROP_GSOCKADDR,
-		g_param_spec_object (SOUP_ADDRESS_GSOCKADDR,
-				     "gsockaddr",
-				     "GSocketAddress to construct from",
-				     G_TYPE_SOCKET_ADDRESS,
-				     G_PARAM_WRITABLE | G_PARAM_CONSTRUCT_ONLY |
-				     G_PARAM_STATIC_STRINGS));
 }
 
 /**
@@ -426,8 +391,11 @@ soup_address_new_from_sockaddr (struct sockaddr *sa, int len)
 SoupAddress *
 soup_address_new_from_gsockaddr (GSocketAddress *addr)
 {
+	struct sockaddr_storage sa;
+
+	g_socket_address_to_native (addr, &sa, sizeof (sa), NULL);
 	return g_object_new (SOUP_TYPE_ADDRESS,
-			     SOUP_ADDRESS_GSOCKADDR, addr,
+			     SOUP_ADDRESS_SOCKADDR, &sa,
 			     NULL);
 }
 
@@ -494,15 +462,6 @@ soup_address_get_name (SoupAddress *addr)
 	return priv->name;
 }
 
-static gsize
-soup_address_get_sockaddr_size (SoupAddressPrivate *priv)
-{
-	if (!priv->sockaddr_size)
-		return SOUP_ADDRESS_FAMILY_SOCKADDR_SIZE (SOUP_ADDRESS_GET_FAMILY (priv));
-
-	return priv->sockaddr_size;
-}
-
 /**
  * soup_address_get_sockaddr:
  * @addr: a #SoupAddress
@@ -527,7 +486,7 @@ soup_address_get_sockaddr (SoupAddress *addr, int *len)
 	priv = soup_address_get_instance_private (addr);
 
 	if (priv->sockaddr && len)
-		*len = soup_address_get_sockaddr_size (priv);
+		*len = SOUP_ADDRESS_FAMILY_SOCKADDR_SIZE (SOUP_ADDRESS_GET_FAMILY (priv));
 	return (struct sockaddr *)priv->sockaddr;
 }
 
@@ -548,7 +507,7 @@ soup_address_get_gsockaddr (SoupAddress *addr)
 	SoupAddressPrivate *priv = soup_address_get_instance_private (addr);
 
 	return g_socket_address_new_from_native (priv->sockaddr,
-						 soup_address_get_sockaddr_size (priv));
+						 SOUP_ADDRESS_FAMILY_SOCKADDR_SIZE (SOUP_ADDRESS_GET_FAMILY (priv)));
 }
 
 static GInetAddress *
@@ -559,7 +518,7 @@ soup_address_make_inet_address (SoupAddress *addr)
 	GInetAddress *gia;
 
 	gsa = g_socket_address_new_from_native (priv->sockaddr,
-						soup_address_get_sockaddr_size (priv));
+						SOUP_ADDRESS_FAMILY_SOCKADDR_SIZE (SOUP_ADDRESS_GET_FAMILY (priv)));
 	gia = g_inet_socket_address_get_address ((GInetSocketAddress *)gsa);
 	g_object_ref (gia);
 	g_object_unref (gsa);
@@ -593,11 +552,6 @@ soup_address_get_physical (SoupAddress *addr)
 
 	if (!priv->physical) {
 		GInetAddress *gia;
-
-		if (SOUP_ADDRESS_GET_FAMILY (priv) == SOUP_ADDRESS_FAMILY_UNIX) {
-			priv->physical = g_strdup ("UNIX");
-			return priv->physical;
-		}
 
 		gia = soup_address_make_inet_address (addr);
 		priv->physical = g_inet_address_to_string (gia);
@@ -1142,18 +1096,15 @@ soup_address_equal_by_ip (gconstpointer addr1, gconstpointer addr2)
 {
 	SoupAddressPrivate *priv1 = soup_address_get_instance_private (SOUP_ADDRESS (addr1));
 	SoupAddressPrivate *priv2 = soup_address_get_instance_private (SOUP_ADDRESS (addr2));
-	gsize size1, size2;
+	int size;
 
 	g_return_val_if_fail (priv1->sockaddr != NULL, FALSE);
 	g_return_val_if_fail (priv2->sockaddr != NULL, FALSE);
 
-	size1 = soup_address_get_sockaddr_size (priv1);
-	size2 = soup_address_get_sockaddr_size (priv2);
-
+	size = SOUP_ADDRESS_FAMILY_SOCKADDR_SIZE (priv1->sockaddr->ss_family);
 	return (priv1->sockaddr->ss_family ==
 		priv2->sockaddr->ss_family &&
-		size1 == size2 &&
-		!memcmp (priv1->sockaddr, priv2->sockaddr, size1));
+		!memcmp (priv1->sockaddr, priv2->sockaddr, size));
 }
 
 
@@ -1193,7 +1144,6 @@ next_address (SoupAddressAddressEnumerator *addr_enum)
 	SoupAddressPrivate *priv = soup_address_get_instance_private (addr_enum->addr);
 	struct sockaddr_storage *ss;
 	int next_addr;
-	gsize size;
 
 	/* If there are two addresses but the first one is unusable
 	 * (eg, it's IPv6 and we can only do IPv4), then we don't want to
@@ -1209,11 +1159,7 @@ next_address (SoupAddressAddressEnumerator *addr_enum)
 	addr_enum->n++;
 
 	ss = &priv->sockaddr[next_addr];
-	if (next_addr == 0)
-		size = soup_address_get_sockaddr_size (priv);
-	else
-		size = SOUP_ADDRESS_FAMILY_SOCKADDR_SIZE (ss->ss_family);
-	return g_socket_address_new_from_native (ss, size);
+	return g_socket_address_new_from_native (ss, SOUP_ADDRESS_FAMILY_SOCKADDR_SIZE (ss->ss_family));
 }
 
 static GSocketAddress *

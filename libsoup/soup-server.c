@@ -1822,11 +1822,6 @@ soup_server_listen_internal (SoupServer *server, SoupSocket *listener,
 	if (!is_listening) {
 		if (!soup_socket_listen_full (listener, error)) {
 			SoupAddress *saddr = soup_socket_get_local_address (listener);
-			SoupAddressFamily family;
-
-			g_object_get (saddr, SOUP_ADDRESS_FAMILY, &family, NULL);
-			if (family == SOUP_ADDRESS_FAMILY_UNIX)
-				return FALSE;
 
 			g_prefix_error (error,
 					_("Could not listen on address %s, port %d: "),
