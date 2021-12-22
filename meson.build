@@ -165,7 +165,11 @@ endif
 
 libpsl_required_version = '>= 0.20'
 libpsl_dep = dependency('libpsl', version : libpsl_required_version,
-  fallback : ['libpsl', 'libpsl_dep'])
+  default_options : [
+    'runtime=no',
+    'builtin=false',
+    'tests=false',
+  ])
 
 if cc.has_header('dlfcn.h')
     cdata.set('HAVE_DLFCN_H', '1')

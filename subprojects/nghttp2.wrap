@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/frida/nghttp2.git
-revision = ae13d24ea59c30e36ca53d1b22c4e664588d0445
+revision = d5c6826fbc4e92a0d29f6fc5248b38621040e5f5
 depth = 1
 
 [provide]

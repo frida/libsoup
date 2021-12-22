@@ -1,0 +1,8 @@
+[wrap-git]
+url = https://github.com/frida/libpsl.git
+revision = 5d3e465d00655a23bed31a716c5db318b3a58521
+depth = 1
+clone-recursive = true
+
+[provide]
+dependency_names = libpsl
