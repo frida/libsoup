@@ -230,6 +230,8 @@ endif
 # Regression tests dependencies #
 #################################
 
+if get_option('tests')
+
 # The situation here is a little bit complicated. For running some of the tests
 # we need the Apache's httpd binary. As we want to know more about its
 # configuration we have to run it and parse the output. But here is the first
@@ -307,6 +309,12 @@ gnutls_dep = dependency('gnutls', version: '>= 3.6.0', required : get_option('pk
 
 if not have_apache or not have_autobahn or not gnutls_dep.found()
   warning('Some regression tests will not be compiled due to missing libraries or modules. Please check the logs for more details.')
+endif
+
+else
+  have_apache = false
+  have_autobahn = false
+  gnutls_dep = disabler()
 endif
 
 ##################
