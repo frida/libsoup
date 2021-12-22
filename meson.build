@@ -220,6 +220,8 @@ endif
 # Regression tests dependencies #
 #################################
 
+if get_option('tests')
+
 # The situation here is a little bit complicated. For running some of the tests
 # we need the Apache's httpd binary. As we want to know more about its
 # configuration we have to run it and parse the output. But here is the first
@@ -310,6 +312,13 @@ endif
 tests_ready = have_apache and have_php and have_php_xmlrpc
 if not tests_ready
   warning('Some regression tests will not be compiled due to missing libraries or modules. Please check the logs for more details.')
+endif
+
+else
+  have_apache = false
+  have_php = false
+  have_php_xmlrpc = false
+  tests_ready = false
 endif
 
 ##################
