@@ -278,6 +278,8 @@ libsoup_dep = declare_dependency(link_with : libsoup,
   sources : soup_enum_h,
   dependencies : [ platform_deps, gssapi_dep, glib_deps ])
 
+meson.override_dependency(libsoup_api_name, libsoup_dep)
+
 if enable_gnome
   soup_gnome_api_name = 'soup-gnome-' + apiversion
   libsoup_gnome_api_name = 'lib' + soup_gnome_api_name
