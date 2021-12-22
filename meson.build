@@ -66,7 +66,6 @@ if cc.get_id() == 'msvc'
   add_project_arguments(cc.get_supported_arguments(['/utf-8']), language: 'c')
 else
   test_cflags = [
-      '-Wall',
       '-Wmissing-include-dirs',
       '-Wpointer-arith',
       '-Winit-self',
