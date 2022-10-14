@@ -59,6 +59,12 @@ option('gtk_doc',
   description: 'Enable generating the API reference'
 )
 
+option('examples',
+  type : 'feature',
+  value : 'auto',
+  description : 'Build examples'
+)
+
 option('tests',
   type: 'boolean',
   value: true,

@@ -416,7 +416,9 @@ subdir('libsoup')
 if find_program('xgettext', required : false).found()
   subdir('po')
 endif
-subdir('examples')
+if get_option('examples').disable_auto_if(meson.is_subproject()).allowed()
+  subdir('examples')
+endif
 
 if get_option('tests')
   subdir('tests')
