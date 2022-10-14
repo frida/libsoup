@@ -59,6 +59,12 @@ option('doc_tests',
   description: 'Enable strict validation of API docs'
 )
 
+option('examples',
+  type: 'feature',
+  value: 'auto',
+  description: 'Build examples'
+)
+
 option('tests',
   type: 'boolean',
   value: true,
