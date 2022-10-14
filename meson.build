@@ -97,7 +97,11 @@ else
     test_cflags += ['-fno-omit-frame-pointer', '-fno-optimize-sibling-calls']
   endif
 
-  common_flags += cc.get_supported_arguments(test_cflags)
+  if meson.is_subproject()
+    common_flags += '-w'
+  else
+    common_flags += cc.get_supported_arguments(test_cflags)
+  endif
 endif
 
 if cc.get_id() != 'msvc' and host_system == 'windows'
