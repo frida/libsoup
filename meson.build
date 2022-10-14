@@ -411,7 +411,9 @@ if xgettext.found()
   subdir('po')
 endif
 
-subdir('examples')
+if get_option('examples').disable_auto_if(meson.is_subproject()).allowed()
+  subdir('examples')
+endif
 subdir('fuzzing')
 if get_option('tests')
   subdir('tests')
