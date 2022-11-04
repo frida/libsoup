@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-multipart.c: multipart HTTP message bodies
  *
@@ -12,22 +12,18 @@
 #include <string.h>
 
 #include "soup-multipart.h"
+#include "soup-headers.h"
+#include "soup-message-headers-private.h"
 #include "soup.h"
-
-/**
- * SECTION:soup-multipart
- * @short_description: multipart HTTP message bodies
- * @see_also: #SoupMessageBody, #SoupMessageHeaders
- *
- **/
 
 /**
  * SoupMultipart:
  *
  * Represents a multipart HTTP message body, parsed according to the
- * syntax of RFC 2046. Of particular interest to HTTP are
- * <literal>multipart/byte-ranges</literal> and
- * <literal>multipart/form-data</literal>.
+ * syntax of RFC 2046.
+ *
+ * Of particular interest to HTTP are `multipart/byte-ranges` and
+ * `multipart/form-data`,
  *
  * Although the headers of a #SoupMultipart body part will contain the
  * full headers from that body part, libsoup does not interpret them
@@ -36,10 +32,9 @@
  * explicitly state otherwise. In other words, don't try to use
  * #SoupMultipart for handling real MIME multiparts.
  *
- * Since: 2.26
  **/
 
-struct SoupMultipart {
+struct _SoupMultipart {
 	char *mime_type, *boundary;
 	GPtrArray *headers, *bodies;
 };
@@ -52,8 +47,8 @@ soup_multipart_new_internal (char *mime_type, char *boundary)
 	multipart = g_slice_new (SoupMultipart);
 	multipart->mime_type = mime_type;
 	multipart->boundary = boundary;
-	multipart->headers = g_ptr_array_new_with_free_func ((GDestroyNotify)soup_message_headers_free);
-	multipart->bodies = g_ptr_array_new_with_free_func ((GDestroyNotify)soup_buffer_free);
+	multipart->headers = g_ptr_array_new_with_free_func ((GDestroyNotify)soup_message_headers_unref);
+	multipart->bodies = g_ptr_array_new_with_free_func ((GDestroyNotify)g_bytes_unref);
 
 	return multipart;
 }
@@ -79,12 +74,13 @@ generate_boundary (void)
  * @mime_type: the MIME type of the multipart to create.
  *
  * Creates a new empty #SoupMultipart with a randomly-generated
- * boundary string. Note that @mime_type must be the full MIME type,
- * including "multipart/".
+ * boundary string.
  *
- * Return value: a new empty #SoupMultipart of the given @mime_type
+ * Note that @mime_type must be the full MIME type, including "multipart/".
  *
- * Since: 2.26
+ * See also: [ctor@Message.new_from_multipart].
+ * 
+ * Returns: a new empty #SoupMultipart of the given @mime_type
  **/
 SoupMultipart *
 soup_multipart_new (const char *mime_type)
@@ -126,23 +122,20 @@ find_boundary (const char *start, const char *end,
  *
  * Parses @headers and @body to form a new #SoupMultipart
  *
- * Return value: (nullable): a new #SoupMultipart (or %NULL if the
- * message couldn't be parsed or wasn't multipart).
- *
- * Since: 2.26
+ * Returns: (nullable): a new #SoupMultipart (or %NULL if the
+ *   message couldn't be parsed or wasn't multipart).
  **/
 SoupMultipart *
 soup_multipart_new_from_message (SoupMessageHeaders *headers,
-				 SoupMessageBody *body)
+				 GBytes             *body)
 {
 	SoupMultipart *multipart;
 	const char *content_type, *boundary;
 	GHashTable *params;
 	int boundary_len;
-	SoupBuffer *flattened;
 	const char *start, *split, *end, *body_end;
 	SoupMessageHeaders *part_headers;
-	SoupBuffer *part_body;
+	GBytes *part_body;
 
 	content_type = soup_message_headers_get_content_type (headers, &params);
 	if (!content_type)
@@ -158,17 +151,17 @@ soup_multipart_new_from_message (SoupMessageHeaders *headers,
 		g_strdup (content_type), g_strdup (boundary));
 	g_hash_table_destroy (params);
 
-	flattened = soup_message_body_flatten (body);
-	body_end = flattened->data + flattened->length;
+        gsize body_size;
+        const char *body_data = g_bytes_get_data (body, &body_size);
+	body_end = body_data + body_size;
 	boundary = multipart->boundary;
 	boundary_len = strlen (boundary);
 
 	/* skip preamble */
-	start = find_boundary (flattened->data, body_end,
+	start = find_boundary (body_data, body_end,
 			       boundary, boundary_len);
 	if (!start) {
 		soup_multipart_free (multipart);
-		soup_buffer_free (flattened);
 		return NULL;
 	}
 
@@ -177,14 +170,12 @@ soup_multipart_new_from_message (SoupMessageHeaders *headers,
 				     boundary, boundary_len);
 		if (!end) {
 			soup_multipart_free (multipart);
-			soup_buffer_free (flattened);
 			return NULL;
 		}
 
 		split = strstr (start, "\r\n\r\n");
 		if (!split || split > end) {
 			soup_multipart_free (multipart);
-			soup_buffer_free (flattened);
 			return NULL;
 		}
 		split += 4;
@@ -203,7 +194,6 @@ soup_multipart_new_from_message (SoupMessageHeaders *headers,
 		if (!soup_headers_parse (start, split - 2 - start,
 					 part_headers)) {
 			soup_multipart_free (multipart);
-			soup_buffer_free (flattened);
 			return NULL;
 		}
 
@@ -212,15 +202,14 @@ soup_multipart_new_from_message (SoupMessageHeaders *headers,
 		 * the following boundary line, which is to say 2 bytes
 		 * after the end of the body.
 		 */
-		part_body = soup_buffer_new_subbuffer (flattened,
-						       split - flattened->data,
-						       end - 2 - split);
+		part_body = g_bytes_new_from_bytes (body, // FIXME
+						    split - body_data,
+						    end - 2 - split);
 		g_ptr_array_add (multipart->bodies, part_body);
 
 		start = end;
 	}
 
-	soup_buffer_free (flattened);
 	return multipart;
 }
 
@@ -228,11 +217,9 @@ soup_multipart_new_from_message (SoupMessageHeaders *headers,
  * soup_multipart_get_length:
  * @multipart: a #SoupMultipart
  *
- * Gets the number of body parts in @multipart
+ * Gets the number of body parts in @multipart.
  *
- * Return value: the number of body parts in @multipart
- *
- * Since: 2.26
+ * Returns: the number of body parts in @multipart
  **/
 int
 soup_multipart_get_length (SoupMultipart *multipart)
@@ -245,20 +232,18 @@ soup_multipart_get_length (SoupMultipart *multipart)
  * @multipart: a #SoupMultipart
  * @part: the part number to get (counting from 0)
  * @headers: (out) (transfer none): return location for the MIME part
- * headers
+ *   headers
  * @body: (out) (transfer none): return location for the MIME part
- * body
+ *   body
  *
  * Gets the indicated body part from @multipart.
  *
- * Return value: %TRUE on success, %FALSE if @part is out of range (in
- * which case @headers and @body won't be set)
- *
- * Since: 2.26
+ * Returns: %TRUE on success, %FALSE if @part is out of range (in
+ *   which case @headers and @body won't be set)
  **/
 gboolean
 soup_multipart_get_part (SoupMultipart *multipart, int part,
-			 SoupMessageHeaders **headers, SoupBuffer **body)
+			 SoupMessageHeaders **headers, GBytes **body)
 {
 	if (part < 0 || part >= multipart->bodies->len)
 		return FALSE;
@@ -274,16 +259,15 @@ soup_multipart_get_part (SoupMultipart *multipart, int part,
  * @body: the MIME part body
  *
  * Adds a new MIME part to @multipart with the given headers and body.
+ *
  * (The multipart will make its own copies of @headers and @body, so
  * you should free your copies if you are not using them for anything
  * else.)
- *
- * Since: 2.26
  **/
 void
 soup_multipart_append_part (SoupMultipart      *multipart,
 			    SoupMessageHeaders *headers,
-			    SoupBuffer         *body)
+			    GBytes         *body)
 {
 	SoupMessageHeaders *headers_copy;
 	SoupMessageHeadersIter iter;
@@ -301,12 +285,13 @@ soup_multipart_append_part (SoupMultipart      *multipart,
 	 * 2) We can't change SoupMessageHeaders to not just do a ref
 	 *    from g_boxed_copy, because that would break language
 	 *    bindings (which need to be able to hold a ref on
-	 *    msg->request_headers, but don't want to duplicate it).
+	 *    soup_message_get_request_headers (msg), but don't want
+         *    to duplicate it).
 	 *
 	 * 3) We don't want to steal the reference to @headers,
 	 *    because then we'd have to either also steal the
 	 *    reference to @body (which would be inconsistent with
-	 *    other SoupBuffer methods), or NOT steal the reference to
+	 *    other GBytes methods), or NOT steal the reference to
 	 *    @body, in which case there'd be inconsistency just
 	 *    between the two arguments of this method!
 	 */
@@ -316,7 +301,7 @@ soup_multipart_append_part (SoupMultipart      *multipart,
 		soup_message_headers_append (headers_copy, name, value);
 
 	g_ptr_array_add (multipart->headers, headers_copy);
-	g_ptr_array_add (multipart->bodies, soup_buffer_copy (body));
+	g_ptr_array_add (multipart->bodies, g_bytes_ref (body));
 }
 
 /**
@@ -325,23 +310,20 @@ soup_multipart_append_part (SoupMultipart      *multipart,
  * @control_name: the name of the control associated with @data
  * @data: the body data
  *
- * Adds a new MIME part containing @data to @multipart, using
- * "Content-Disposition: form-data", as per the HTML forms
- * specification. See soup_form_request_new_from_multipart() for more
- * details.
+ * Adds a new MIME part containing @data to @multipart.
  *
- * Since: 2.26
- **/ 
+ * Uses "Content-Disposition: form-data", as per the HTML forms specification.
+ **/
 void
 soup_multipart_append_form_string (SoupMultipart *multipart,
 				   const char *control_name, const char *data)
 {
-	SoupBuffer *body;
+	GBytes *body;
 
-	body = soup_buffer_new (SOUP_MEMORY_COPY, data, strlen (data));
+	body = g_bytes_new (data, strlen (data));
 	soup_multipart_append_form_file (multipart, control_name,
 					 NULL, NULL, body);
-	soup_buffer_free (body);
+	g_bytes_unref (body);
 }
 
 /**
@@ -352,17 +334,14 @@ soup_multipart_append_form_string (SoupMultipart *multipart,
  * @content_type: the MIME type of the file, or %NULL if not known
  * @body: the file data
  *
- * Adds a new MIME part containing @body to @multipart, using
- * "Content-Disposition: form-data", as per the HTML forms
- * specification. See soup_form_request_new_from_multipart() for more
- * details.
+ * Adds a new MIME part containing @body to @multipart
  *
- * Since: 2.26
- **/ 
+ * Uses "Content-Disposition: form-data", as per the HTML forms specification.
+ **/
 void
 soup_multipart_append_form_file (SoupMultipart *multipart,
 				 const char *control_name, const char *filename,
-				 const char *content_type, SoupBuffer *body)
+				 const char *content_type, GBytes *body)
 {
 	SoupMessageHeaders *headers;
 	GString *disposition;
@@ -374,36 +353,34 @@ soup_multipart_append_form_file (SoupMultipart *multipart,
 		g_string_append (disposition, "; ");
 		soup_header_g_string_append_param_quoted (disposition, "filename", filename);
 	}
-	soup_message_headers_append (headers, "Content-Disposition",
-				     disposition->str);
+	soup_message_headers_append_common (headers, SOUP_HEADER_CONTENT_DISPOSITION,
+                                            disposition->str);
 	g_string_free (disposition, TRUE);
 
 	if (content_type) {
-		soup_message_headers_append (headers, "Content-Type",
-					     content_type);
+		soup_message_headers_append_common (headers, SOUP_HEADER_CONTENT_TYPE,
+                                                    content_type);
 	}
 
 	g_ptr_array_add (multipart->headers, headers);
-	g_ptr_array_add (multipart->bodies, soup_buffer_copy (body));
+	g_ptr_array_add (multipart->bodies, g_bytes_ref (body));
 }
 
 /**
  * soup_multipart_to_message:
  * @multipart: a #SoupMultipart
  * @dest_headers: the headers of the HTTP message to serialize @multipart to
- * @dest_body: the body of the HTTP message to serialize @multipart to
+ * @dest_body: (out): the body of the HTTP message to serialize @multipart to
  *
  * Serializes @multipart to @dest_headers and @dest_body.
- *
- * Since: 2.26
  **/
 void
-soup_multipart_to_message (SoupMultipart *multipart,
+soup_multipart_to_message (SoupMultipart      *multipart,
 			   SoupMessageHeaders *dest_headers,
-			   SoupMessageBody *dest_body)
+			   GBytes            **dest_body)
 {
 	SoupMessageHeaders *part_headers;
-	SoupBuffer *part_body;
+	GBytes *part_body;
 	SoupMessageHeadersIter iter;
 	const char *name, *value;
 	GString *str;
@@ -417,11 +394,14 @@ soup_multipart_to_message (SoupMultipart *multipart,
 					       params);
 	g_hash_table_destroy (params);
 
+	str = g_string_new (NULL);
+
 	for (i = 0; i < multipart->bodies->len; i++) {
 		part_headers = multipart->headers->pdata[i];
 		part_body = multipart->bodies->pdata[i];
 
-		str = g_string_new (i == 0 ? NULL : "\r\n");
+		if (i > 0)
+			g_string_append (str, "\r\n");
 		g_string_append (str, "--");
 		g_string_append (str, multipart->boundary);
 		g_string_append (str, "\r\n");
@@ -429,33 +409,28 @@ soup_multipart_to_message (SoupMultipart *multipart,
 		while (soup_message_headers_iter_next (&iter, &name, &value))
 			g_string_append_printf (str, "%s: %s\r\n", name, value);
 		g_string_append (str, "\r\n");
-		soup_message_body_append (dest_body, SOUP_MEMORY_TAKE,
-					  str->str, str->len);
-		g_string_free (str, FALSE);
-
-		soup_message_body_append_buffer (dest_body, part_body);
+		g_string_append_len (str,
+				     g_bytes_get_data (part_body, NULL),
+				     g_bytes_get_size (part_body));
 	}
 
-	str = g_string_new ("\r\n--");
+	g_string_append (str, "\r\n--");
 	g_string_append (str, multipart->boundary);
 	g_string_append (str, "--\r\n");
-	soup_message_body_append (dest_body, SOUP_MEMORY_TAKE,
-				  str->str, str->len);
-	g_string_free (str, FALSE);
 
 	/* (The "\r\n" after the close-delimiter seems wrong according
 	 * to my reading of RFCs 2046 and 2616, but that's what
 	 * everyone else does.)
 	 */
+
+	*dest_body = g_string_free_to_bytes (str);
 }
 
 /**
  * soup_multipart_free:
  * @multipart: a #SoupMultipart
  *
- * Frees @multipart
- *
- * Since: 2.26
+ * Frees @multipart.
  **/
 void
 soup_multipart_free (SoupMultipart *multipart)

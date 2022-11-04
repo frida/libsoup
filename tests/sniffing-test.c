@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2009 Gustavo Noronha Silva <gns@gnome.org>.
  */
@@ -6,31 +6,35 @@
 #include "test-utils.h"
 
 SoupSession *session;
-SoupURI *base_uri;
-SoupMessageBody *chunk_data;
+GUri *base_uri;
 
 static void
-server_callback (SoupServer *server, SoupMessage *msg,
-		 const char *path, GHashTable *query,
-		 SoupClientContext *context, gpointer data)
+server_callback (SoupServer        *server,
+		 SoupServerMessage *msg,
+		 const char        *path,
+		 GHashTable        *query,
+		 gpointer           data)
 {
 	GError *error = NULL;
 	char *query_key;
-	SoupBuffer *response = NULL;
+	GBytes *response = NULL;
 	gsize offset;
+	SoupMessageHeaders *response_headers;
+	SoupMessageBody *response_body;
 	gboolean empty_response = FALSE;
 
-	if (msg->method != SOUP_METHOD_GET) {
-		soup_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED);
+	if (soup_server_message_get_method (msg) != SOUP_METHOD_GET) {
+		soup_server_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED, NULL);
 		return;
 	}
 
-	soup_message_set_status (msg, SOUP_STATUS_OK);
+	soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
 
+	response_headers = soup_server_message_get_response_headers (msg);
 	if (query) {
 		query_key = g_hash_table_lookup (query, "chunked");
 		if (query_key && g_str_equal (query_key, "yes")) {
-			soup_message_headers_set_encoding (msg->response_headers,
+			soup_message_headers_set_encoding (response_headers,
 							   SOUP_ENCODING_CHUNKED);
 		}
 
@@ -45,7 +49,7 @@ server_callback (SoupServer *server, SoupMessage *msg,
 			g_assert_no_error (error);
 		}
 
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Content-Type", "text/plain");
 	}
 
@@ -56,10 +60,10 @@ server_callback (SoupServer *server, SoupMessage *msg,
 		g_assert_no_error (error);
 		g_free (base_name);
 
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "X-Content-Type-Options", "nosniff");
 
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Content-Type", "no/sniffing-allowed");
 	}
 
@@ -70,24 +74,25 @@ server_callback (SoupServer *server, SoupMessage *msg,
 		g_assert_no_error (error);
 		g_free (base_name);
 
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Content-Type", "text/plain");
 	}
 
 	if (g_str_has_prefix (path, "/unknown/")) {
-		char *base_name = g_path_get_basename (path);
+		if (!empty_response) {
+			char *base_name = g_path_get_basename (path);
 
-		response = soup_test_load_resource (base_name, &error);
-		g_assert_no_error (error);
-		g_free (base_name);
+			response = soup_test_load_resource (base_name, &error);
+			g_assert_no_error (error);
+			g_free (base_name);
+		}
 
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Content-Type", "UNKNOWN/unknown");
 	}
 
 	if (g_str_has_prefix (path, "/type/")) {
 		char **components = g_strsplit (path, "/", 4);
-		char *ptr;
 
 		char *base_name = g_path_get_basename (path);
 
@@ -96,10 +101,10 @@ server_callback (SoupServer *server, SoupMessage *msg,
 		g_free (base_name);
 
 		/* Hack to allow passing type in the URI */
-		ptr = g_strrstr (components[2], "_");
+		char *ptr = g_strrstr (components[2], "_");
 		*ptr = '/';
 
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Content-Type", components[2]);
 		g_strfreev (components);
 	}
@@ -111,133 +116,96 @@ server_callback (SoupServer *server, SoupMessage *msg,
 		g_assert_no_error (error);
 		g_free (base_name);
 
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Content-Type", "text/xml");
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Content-Type", "text/plain");
 	}
 
+	response_body = soup_server_message_get_response_body (msg);
 	if (response) {
-		for (offset = 0; offset < response->length; offset += 500) {
-			soup_message_body_append (msg->response_body,
-						  SOUP_MEMORY_COPY,
-						  response->data + offset,
-						  MIN (500, response->length - offset));
+                gsize response_size = g_bytes_get_size (response);
+		for (offset = 0; offset < response_size; offset += 500) {
+                        GBytes *chunk = g_bytes_new_from_bytes (response, offset, MIN (500, response_size - offset));
+                        soup_message_body_append_bytes (response_body, chunk);
+                        g_bytes_unref (chunk);
 		}
 
-		soup_buffer_free (response);
+		g_bytes_unref (response);
 	}
 
-	soup_message_body_complete (msg->response_body);
+	soup_message_body_complete (response_body);
 }
-
-static gboolean
-unpause_msg (gpointer data)
-{
-	SoupMessage *msg = (SoupMessage*)data;
-	debug_printf (2, "  unpause\n");
-	soup_session_unpause_message (session, msg);
-	return FALSE;
-}
-
 
 static void
-content_sniffed (SoupMessage *msg, char *content_type, GHashTable *params, gpointer data)
+content_sniffed (SoupMessage *msg,
+		 char        *content_type,
+		 GHashTable  *params)
 {
-	gboolean should_pause = GPOINTER_TO_INT (data);
-
 	debug_printf (2, "  content-sniffed -> %s\n", content_type);
 
 	soup_test_assert (g_object_get_data (G_OBJECT (msg), "got-chunk") == NULL,
 			  "got-chunk got emitted before content-sniffed");
 
 	g_object_set_data (G_OBJECT (msg), "content-sniffed", GINT_TO_POINTER (TRUE));
-
-	if (should_pause) {
-		debug_printf (2, "  pause\n");
-		soup_session_pause_message (session, msg);
-		g_idle_add (unpause_msg, msg);
-	}
 }
 
 static void
-got_headers (SoupMessage *msg, gpointer data)
+got_headers (SoupMessage *msg)
 {
-	gboolean should_pause = GPOINTER_TO_INT (data);
-
 	debug_printf (2, "  got-headers\n");
 
 	soup_test_assert (g_object_get_data (G_OBJECT (msg), "content-sniffed") == NULL,
 			  "content-sniffed got emitted before got-headers");
 
 	g_object_set_data (G_OBJECT (msg), "got-headers", GINT_TO_POINTER (TRUE));
-
-	if (should_pause) {
-		debug_printf (2, "  pause\n");
-		soup_session_pause_message (session, msg);
-		g_idle_add (unpause_msg, msg);
-	}
-}
-
-static void
-got_chunk (SoupMessage *msg, SoupBuffer *chunk, gpointer data)
-{
-	gboolean should_accumulate = GPOINTER_TO_INT (data);
-
-	debug_printf (2, "  got-chunk\n");
-
-	g_object_set_data (G_OBJECT (msg), "got-chunk", GINT_TO_POINTER (TRUE));
-
-	if (!should_accumulate) {
-		if (!chunk_data)
-			chunk_data = soup_message_body_new ();
-		soup_message_body_append_buffer (chunk_data, chunk);
-	}
 }
 
 static void
 do_signals_test (gboolean should_content_sniff,
-		 gboolean should_pause,
-		 gboolean should_accumulate,
 		 gboolean chunked_encoding,
 		 gboolean empty_response)
 {
-	SoupURI *uri = soup_uri_new_with_base (base_uri, "/mbox");
+	GUri *uri = g_uri_parse_relative (base_uri, "/mbox", SOUP_HTTP_URI_FLAGS, NULL);
 	SoupMessage *msg = soup_message_new_from_uri ("GET", uri);
-	SoupBuffer *expected;
+	GBytes *expected;
 	GError *error = NULL;
-	SoupBuffer *body = NULL;
+	GBytes *body = NULL;
 
-	debug_printf (1, "do_signals_test(%ssniff, %spause, %saccumulate, %schunked, %sempty)\n",
+	debug_printf (1, "do_signals_test(%ssniff, %schunked, %sempty)\n",
 		      should_content_sniff ? "" : "!",
-		      should_pause ? "" : "!",
-		      should_accumulate ? "" : "!",
 		      chunked_encoding ? "" : "!",
 		      empty_response ? "" : "!");
 
-	if (chunked_encoding)
-		soup_uri_set_query (uri, "chunked=yes");
+	if (chunked_encoding) {
+		GUri *copy = soup_uri_copy (uri, SOUP_URI_QUERY, "chunked=yes", SOUP_URI_NONE);
+		g_uri_unref (uri);
+		uri = copy;
+
+	}
 
 	if (empty_response) {
-		if (uri->query) {
-			char *tmp = uri->query;
-			uri->query = g_strdup_printf ("%s&empty_response=yes", tmp);
-			g_free (tmp);
-		} else
-			soup_uri_set_query (uri, "empty_response=yes");
+		if (g_uri_get_query (uri)) {
+			char *new_query = g_strdup_printf ("%s&empty_response=yes", g_uri_get_query (uri));
+			GUri *copy = soup_uri_copy (uri, SOUP_URI_QUERY, new_query, SOUP_URI_NONE);
+     			g_free (new_query);
+			g_uri_unref (uri);
+			uri = copy;
+		} else {
+			GUri *copy = soup_uri_copy (uri, SOUP_URI_QUERY, "empty_response=yes", SOUP_URI_NONE);
+			g_uri_unref (uri);
+			uri = copy;
+		}
 	}
 
 	soup_message_set_uri (msg, uri);
 
-	soup_message_body_set_accumulate (msg->response_body, should_accumulate);
-
 	g_object_connect (msg,
-			  "signal::got-headers", got_headers, GINT_TO_POINTER (should_pause),
-			  "signal::got-chunk", got_chunk, GINT_TO_POINTER (should_accumulate),
-			  "signal::content_sniffed", content_sniffed, GINT_TO_POINTER (should_pause),
+			  "signal::got-headers", got_headers, NULL,
+			  "signal::content_sniffed", content_sniffed, NULL,
 			  NULL);
 
-	soup_session_send_message (session, msg);
+	body = soup_test_session_async_send (session, msg, NULL, NULL);
 
 	if (should_content_sniff) {
 		soup_test_assert (g_object_get_data (G_OBJECT (msg), "content-sniffed") != NULL,
@@ -248,31 +216,21 @@ do_signals_test (gboolean should_content_sniff,
 	}
 
 	if (empty_response)
-		expected = soup_buffer_new (SOUP_MEMORY_STATIC, "", 0);
+		expected = g_bytes_new_static (NULL, 0);
 	else {
 		expected = soup_test_load_resource ("mbox", &error);
 		g_assert_no_error (error);
 	}
 
-	if (!should_accumulate && chunk_data)
-		body = soup_message_body_flatten (chunk_data);
-	else if (msg->response_body)
-		body = soup_message_body_flatten (msg->response_body);
-
 	if (body) {
-		soup_assert_cmpmem (body->data, body->length,
-				    expected->data, expected->length);
-	}
+                //g_message ("|||body (%zu): %s", g_bytes_get_size (body), (char*)g_bytes_get_data (body, NULL));
+                //g_message ("|||expected (%zu): %s", g_bytes_get_size (expected), (char*)g_bytes_get_data (expected, NULL));
+                g_assert_true (g_bytes_equal (body, expected));
+        }
 
-	soup_buffer_free (expected);
-	if (body)
-		soup_buffer_free (body);
-	if (chunk_data) {
-		soup_message_body_free (chunk_data);
-		chunk_data = NULL;
-	}
-
-	soup_uri_free (uri);
+	g_bytes_unref (expected);
+	g_bytes_unref (body);
+	g_uri_unref (uri);
 	g_object_unref (msg);
 }
 
@@ -285,28 +243,13 @@ do_signals_tests (gconstpointer data)
 		soup_session_remove_feature_by_type (session, SOUP_TYPE_CONTENT_SNIFFER);
 
 	do_signals_test (should_content_sniff,
-			 FALSE, FALSE, FALSE, FALSE);
+			 FALSE, FALSE);
 	do_signals_test (should_content_sniff,
-			 FALSE, FALSE, TRUE, FALSE);
+			 TRUE, FALSE);
 	do_signals_test (should_content_sniff,
-			 FALSE, TRUE, FALSE, FALSE);
+			 FALSE, TRUE);
 	do_signals_test (should_content_sniff,
-			 FALSE, TRUE, TRUE, FALSE);
-
-	do_signals_test (should_content_sniff,
-			 TRUE, TRUE, FALSE, FALSE);
-	do_signals_test (should_content_sniff,
-			 TRUE, TRUE, TRUE, FALSE);
-	do_signals_test (should_content_sniff,
-			 TRUE, FALSE, FALSE, FALSE);
-	do_signals_test (should_content_sniff,
-			 TRUE, FALSE, TRUE, FALSE);
-
-	/* FIXME g_test_bug ("587907") */
-	do_signals_test (should_content_sniff,
-			 TRUE, TRUE, FALSE, TRUE);
-	do_signals_test (should_content_sniff,
-			 TRUE, TRUE, TRUE, TRUE);
+			 TRUE, TRUE);
 
 	if (!should_content_sniff)
 		soup_session_add_feature_by_type (session, SOUP_TYPE_CONTENT_SNIFFER);
@@ -338,39 +281,23 @@ sniffing_content_sniffed (SoupMessage *msg, const char *content_type,
 static void
 test_sniffing (const char *path, const char *expected_type)
 {
-	SoupURI *uri;
+	GUri *uri;
 	SoupMessage *msg;
-	SoupRequest *req;
-	GInputStream *stream;
+	GBytes *body;
 	char *sniffed_type = NULL;
-	const char *req_sniffed_type;
-	GError *error = NULL;
 
-	uri = soup_uri_new_with_base (base_uri, path);
+	uri = g_uri_parse_relative (base_uri, path, SOUP_HTTP_URI_FLAGS, NULL);
 	msg = soup_message_new_from_uri ("GET", uri);
 
 	g_signal_connect (msg, "content-sniffed",
 			  G_CALLBACK (sniffing_content_sniffed), &sniffed_type);
 
-	soup_session_send_message (session, msg);
+	body = soup_test_session_async_send (session, msg, NULL, NULL);
 	g_assert_cmpstr (sniffed_type, ==, expected_type);
 	g_free (sniffed_type);
+	g_bytes_unref (body);
 	g_object_unref (msg);
-
-	req = soup_session_request_uri (session, uri, NULL);
-	stream = soup_test_request_send (req, NULL, 0, &error);
-	if (stream) {
-		soup_test_request_close_stream (req, stream, NULL, &error);
-		g_object_unref (stream);
-	}
-	g_assert_no_error (error);
-	g_clear_error (&error);
-
-	req_sniffed_type = soup_request_get_content_type (req);
-	g_assert_cmpstr (req_sniffed_type, ==, expected_type);
-	g_object_unref (req);
-
-	soup_uri_free (uri);
+	g_uri_unref (uri);
 }
 
 static void
@@ -390,17 +317,14 @@ static void
 test_disabled (gconstpointer data)
 {
 	const char *path = data;
-	SoupURI *uri;
+	GUri *uri;
 	SoupMessage *msg;
-	SoupRequest *req;
-	GInputStream *stream;
+	GBytes *body;
 	char *sniffed_type = NULL;
-	const char *sniffed_content_type;
-	GError *error = NULL;
 
 	g_test_bug ("574773");
 
-	uri = soup_uri_new_with_base (base_uri, path);
+	uri = g_uri_parse_relative (base_uri, path, SOUP_HTTP_URI_FLAGS, NULL);
 
 	msg = soup_message_new_from_uri ("GET", uri);
 	g_assert_false (soup_message_is_feature_disabled (msg, SOUP_TYPE_CONTENT_SNIFFER));
@@ -410,30 +334,12 @@ test_disabled (gconstpointer data)
 	g_signal_connect (msg, "content-sniffed",
 			  G_CALLBACK (sniffing_content_sniffed), &sniffed_type);
 
-	soup_session_send_message (session, msg);
+	body = soup_test_session_async_send (session, msg, NULL, NULL);
 
 	g_assert_null (sniffed_type);
+	g_bytes_unref (body);
 	g_object_unref (msg);
-
-	req = soup_session_request_uri (session, uri, NULL);
-	msg = soup_request_http_get_message (SOUP_REQUEST_HTTP (req));
-	g_assert_false (soup_message_is_feature_disabled (msg, SOUP_TYPE_CONTENT_SNIFFER));
-	soup_message_disable_feature (msg, SOUP_TYPE_CONTENT_SNIFFER);
-	g_assert_true (soup_message_is_feature_disabled (msg, SOUP_TYPE_CONTENT_SNIFFER));
-	g_object_unref (msg);
-	stream = soup_test_request_send (req, NULL, 0, &error);
-	if (stream) {
-		soup_test_request_close_stream (req, stream, NULL, &error);
-		g_object_unref (stream);
-	}
-	g_assert_no_error (error);
-
-	sniffed_content_type = soup_request_get_content_type (req);
-	g_assert_cmpstr (sniffed_content_type, ==, NULL);
-
-	g_object_unref (req);
-
-	soup_uri_free (uri);
+	g_uri_unref (uri);
 }
 
 int
@@ -448,9 +354,7 @@ main (int argc, char **argv)
 	soup_server_add_handler (server, NULL, server_callback, NULL, NULL);
 	base_uri = soup_test_server_get_uri (server, "http", NULL);
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC,
-					 SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-					 NULL);
+	session = soup_test_session_new (NULL);
 	soup_session_add_feature_by_type (session, SOUP_TYPE_CONTENT_SNIFFER);
 
 	g_test_add_data_func ("/sniffing/signals/no-sniffer",
@@ -524,6 +428,9 @@ main (int argc, char **argv)
 			      do_sniffing_test);
 	g_test_add_data_func ("/sniffing/type/unknown-mbox",
 			      "unknown/mbox => text/plain",
+			      do_sniffing_test);
+	g_test_add_data_func ("/sniffing/type/unknown-empty",
+			      "unknown/mbox?empty_response=yes => text/plain",
 			      do_sniffing_test);
 	g_test_add_data_func ("/sniffing/type/unknown-binary",
 			      "unknown/text_binary.txt => application/octet-stream",
@@ -612,7 +519,7 @@ main (int argc, char **argv)
 
 	ret = g_test_run ();
 
-	soup_uri_free (base_uri);
+	g_uri_unref (base_uri);
 
 	soup_test_session_abort_unref (session);
 	soup_test_server_quit_unref (server);

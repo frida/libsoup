@@ -1,18 +1,16 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-status.h: HTTP status code and status class definitions
  *
  * Copyright (C) 2001-2003, Ximian, Inc.
  */
 
-#ifndef __SOUP_STATUS_H__
-#define __SOUP_STATUS_H__ 1
+#pragma once
 
-#include <libsoup/soup-version.h>
+#include "soup-version.h"
 
 G_BEGIN_DECLS
 
-#define SOUP_STATUS_IS_TRANSPORT_ERROR(status) ((status) >  0   && (status) < 100)
 #define SOUP_STATUS_IS_INFORMATIONAL(status)   ((status) >= 100 && (status) < 200)
 #define SOUP_STATUS_IS_SUCCESSFUL(status)      ((status) >= 200 && (status) < 300)
 #define SOUP_STATUS_IS_REDIRECTION(status)     ((status) >= 300 && (status) < 400)
@@ -22,20 +20,6 @@ G_BEGIN_DECLS
 typedef enum {
 	SOUP_STATUS_NONE,
 
-	/* Transport Errors */
-	SOUP_STATUS_CANCELLED                       = 1,
-	SOUP_STATUS_CANT_RESOLVE,
-	SOUP_STATUS_CANT_RESOLVE_PROXY,
-	SOUP_STATUS_CANT_CONNECT,
-	SOUP_STATUS_CANT_CONNECT_PROXY,
-	SOUP_STATUS_SSL_FAILED,
-	SOUP_STATUS_IO_ERROR,
-	SOUP_STATUS_MALFORMED,
-	SOUP_STATUS_TRY_AGAIN,
-	SOUP_STATUS_TOO_MANY_REDIRECTS,
-	SOUP_STATUS_TLS_FAILED,
-
-	/* HTTP Status Codes */
 	SOUP_STATUS_CONTINUE                        = 100,
 	SOUP_STATUS_SWITCHING_PROTOCOLS             = 101,
 	SOUP_STATUS_PROCESSING                      = 102, /* WebDAV */
@@ -80,6 +64,7 @@ typedef enum {
 	SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE = 416,
 	SOUP_STATUS_INVALID_RANGE                   = SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE,
 	SOUP_STATUS_EXPECTATION_FAILED              = 417,
+        SOUP_STATUS_MISDIRECTED_REQUEST             = 421, /* HTTP/2 */
 	SOUP_STATUS_UNPROCESSABLE_ENTITY            = 422, /* WebDAV */
 	SOUP_STATUS_LOCKED                          = 423, /* WebDAV */
 	SOUP_STATUS_FAILED_DEPENDENCY               = 424, /* WebDAV */
@@ -94,99 +79,13 @@ typedef enum {
 	SOUP_STATUS_NOT_EXTENDED                    = 510  /* RFC 2774 */
 } SoupStatus;
 
-SOUP_AVAILABLE_IN_2_4
-const char *soup_status_get_phrase (guint status_code);
-SOUP_AVAILABLE_IN_2_26
-guint       soup_status_proxify    (guint status_code);
-
-/**
- * SOUP_HTTP_ERROR:
- *
- * A #GError domain representing an HTTP status. Use a #SoupStatus for
- * the <structfield>code</structfield> value.
- **/
-#define SOUP_HTTP_ERROR (soup_http_error_quark())
-SOUP_AVAILABLE_IN_2_4
-GQuark soup_http_error_quark (void);
-
-#ifndef SOUP_DISABLE_DEPRECATED
-/* For introspection purposes, we create a duplicate enum type under
- * the deprecated type name, since some (all?) bindings don't handle
- * enum type typedefs the way we want.
- */
 typedef enum {
-	SOUP_KNOWN_STATUS_CODE_NONE,
+        SOUP_HTTP_1_0 = 0, /*< nick=http-1-0 >*/
+        SOUP_HTTP_1_1 = 1, /*< nick=http-1-1 >*/
+        SOUP_HTTP_2_0 = 2  /*< nick=http-2-0 >*/
+} SoupHTTPVersion;
 
-	SOUP_KNOWN_STATUS_CODE_CANCELLED                       = 1,
-	SOUP_KNOWN_STATUS_CODE_CANT_RESOLVE,
-	SOUP_KNOWN_STATUS_CODE_CANT_RESOLVE_PROXY,
-	SOUP_KNOWN_STATUS_CODE_CANT_CONNECT,
-	SOUP_KNOWN_STATUS_CODE_CANT_CONNECT_PROXY,
-	SOUP_KNOWN_STATUS_CODE_SSL_FAILED,
-	SOUP_KNOWN_STATUS_CODE_IO_ERROR,
-	SOUP_KNOWN_STATUS_CODE_MALFORMED,
-	SOUP_KNOWN_STATUS_CODE_TRY_AGAIN,
-	SOUP_KNOWN_STATUS_CODE_TOO_MANY_REDIRECTS,
-	SOUP_KNOWN_STATUS_CODE_TLS_FAILED,
-
-	SOUP_KNOWN_STATUS_CODE_CONTINUE                        = 100,
-	SOUP_KNOWN_STATUS_CODE_SWITCHING_PROTOCOLS             = 101,
-	SOUP_KNOWN_STATUS_CODE_PROCESSING                      = 102,
-
-	SOUP_KNOWN_STATUS_CODE_OK                              = 200,
-	SOUP_KNOWN_STATUS_CODE_CREATED                         = 201,
-	SOUP_KNOWN_STATUS_CODE_ACCEPTED                        = 202,
-	SOUP_KNOWN_STATUS_CODE_NON_AUTHORITATIVE               = 203,
-	SOUP_KNOWN_STATUS_CODE_NO_CONTENT                      = 204,
-	SOUP_KNOWN_STATUS_CODE_RESET_CONTENT                   = 205,
-	SOUP_KNOWN_STATUS_CODE_PARTIAL_CONTENT                 = 206,
-	SOUP_KNOWN_STATUS_CODE_MULTI_STATUS                    = 207,
-
-	SOUP_KNOWN_STATUS_CODE_MULTIPLE_CHOICES                = 300,
-	SOUP_KNOWN_STATUS_CODE_MOVED_PERMANENTLY               = 301,
-	SOUP_KNOWN_STATUS_CODE_FOUND                           = 302,
-	SOUP_KNOWN_STATUS_CODE_MOVED_TEMPORARILY               = 302,
-	SOUP_KNOWN_STATUS_CODE_SEE_OTHER                       = 303,
-	SOUP_KNOWN_STATUS_CODE_NOT_MODIFIED                    = 304,
-	SOUP_KNOWN_STATUS_CODE_USE_PROXY                       = 305,
-	SOUP_KNOWN_STATUS_CODE_NOT_APPEARING_IN_THIS_PROTOCOL  = 306,
-	SOUP_KNOWN_STATUS_CODE_TEMPORARY_REDIRECT              = 307,
-
-	SOUP_KNOWN_STATUS_CODE_BAD_REQUEST                     = 400,
-	SOUP_KNOWN_STATUS_CODE_UNAUTHORIZED                    = 401,
-	SOUP_KNOWN_STATUS_CODE_PAYMENT_REQUIRED                = 402,
-	SOUP_KNOWN_STATUS_CODE_FORBIDDEN                       = 403,
-	SOUP_KNOWN_STATUS_CODE_NOT_FOUND                       = 404,
-	SOUP_KNOWN_STATUS_CODE_METHOD_NOT_ALLOWED              = 405,
-	SOUP_KNOWN_STATUS_CODE_NOT_ACCEPTABLE                  = 406,
-	SOUP_KNOWN_STATUS_CODE_PROXY_AUTHENTICATION_REQUIRED   = 407,
-	SOUP_KNOWN_STATUS_CODE_PROXY_UNAUTHORIZED              = SOUP_KNOWN_STATUS_CODE_PROXY_AUTHENTICATION_REQUIRED,
-	SOUP_KNOWN_STATUS_CODE_REQUEST_TIMEOUT                 = 408,
-	SOUP_KNOWN_STATUS_CODE_CONFLICT                        = 409,
-	SOUP_KNOWN_STATUS_CODE_GONE                            = 410,
-	SOUP_KNOWN_STATUS_CODE_LENGTH_REQUIRED                 = 411,
-	SOUP_KNOWN_STATUS_CODE_PRECONDITION_FAILED             = 412,
-	SOUP_KNOWN_STATUS_CODE_REQUEST_ENTITY_TOO_LARGE        = 413,
-	SOUP_KNOWN_STATUS_CODE_REQUEST_URI_TOO_LONG            = 414,
-	SOUP_KNOWN_STATUS_CODE_UNSUPPORTED_MEDIA_TYPE          = 415,
-	SOUP_KNOWN_STATUS_CODE_REQUESTED_RANGE_NOT_SATISFIABLE = 416,
-	SOUP_KNOWN_STATUS_CODE_INVALID_RANGE                   = SOUP_KNOWN_STATUS_CODE_REQUESTED_RANGE_NOT_SATISFIABLE,
-	SOUP_KNOWN_STATUS_CODE_EXPECTATION_FAILED              = 417,
-	SOUP_KNOWN_STATUS_CODE_UNPROCESSABLE_ENTITY            = 422,
-	SOUP_KNOWN_STATUS_CODE_LOCKED                          = 423,
-	SOUP_KNOWN_STATUS_CODE_FAILED_DEPENDENCY               = 424,
-
-	SOUP_KNOWN_STATUS_CODE_INTERNAL_SERVER_ERROR           = 500,
-	SOUP_KNOWN_STATUS_CODE_NOT_IMPLEMENTED                 = 501,
-	SOUP_KNOWN_STATUS_CODE_BAD_GATEWAY                     = 502,
-	SOUP_KNOWN_STATUS_CODE_SERVICE_UNAVAILABLE             = 503,
-	SOUP_KNOWN_STATUS_CODE_GATEWAY_TIMEOUT                 = 504,
-	SOUP_KNOWN_STATUS_CODE_HTTP_VERSION_NOT_SUPPORTED      = 505,
-	SOUP_KNOWN_STATUS_CODE_INSUFFICIENT_STORAGE            = 507,
-	SOUP_KNOWN_STATUS_CODE_NOT_EXTENDED                    = 510
-} SoupKnownStatusCode;
-#endif
+SOUP_AVAILABLE_IN_ALL
+const char *soup_status_get_phrase (guint status_code);
 
 G_END_DECLS
-
-#endif /* __SOUP_STATUS_H__ */

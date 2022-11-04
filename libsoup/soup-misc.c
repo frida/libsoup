@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-misc.c: Miscellaneous functions
 
@@ -12,15 +12,6 @@
 #include <string.h>
 
 #include "soup-misc.h"
-#include "soup-misc-private.h"
-
-/**
- * SECTION:soup-misc
- * @short_description: Miscellaneous functions
- *
- **/
-
-const gboolean soup_ssl_supported = TRUE;
 
 /**
  * soup_str_case_hash:
@@ -28,7 +19,7 @@ const gboolean soup_ssl_supported = TRUE;
  *
  * Hashes @key in a case-insensitive manner.
  *
- * Return value: the hash code.
+ * Returns: the hash code.
  **/
 guint
 soup_str_case_hash (gconstpointer key)
@@ -50,7 +41,7 @@ soup_str_case_hash (gconstpointer key)
  *
  * Compares @v1 and @v2 in a case-insensitive manner
  *
- * Return value: %TRUE if they are equal (modulo case)
+ * Returns: %TRUE if they are equal (modulo case)
  **/
 gboolean
 soup_str_case_equal (gconstpointer v1,
@@ -60,61 +51,6 @@ soup_str_case_equal (gconstpointer v1,
 	const char *string2 = v2;
 
 	return g_ascii_strcasecmp (string1, string2) == 0;
-}
-
-/**
- * soup_add_io_watch: (skip)
- * @async_context: (allow-none): the #GMainContext to dispatch the I/O
- * watch in, or %NULL for the default context
- * @chan: the #GIOChannel to watch
- * @condition: the condition to watch for
- * @function: the callback to invoke when @condition occurs
- * @data: user data to pass to @function
- *
- * Adds an I/O watch as with g_io_add_watch(), but using the given
- * @async_context.
- *
- * Return value: a #GSource, which can be removed from @async_context
- * with g_source_destroy().
- **/
-GSource *
-soup_add_io_watch (GMainContext *async_context,
-		   GIOChannel *chan, GIOCondition condition,
-		   GIOFunc function, gpointer data)
-{
-	GSource *watch = g_io_create_watch (chan, condition);
-	g_source_set_callback (watch, (GSourceFunc) function, data, NULL);
-	g_source_attach (watch, async_context);
-	g_source_unref (watch);
-	return watch;
-}
-
-/**
- * soup_add_idle: (skip)
- * @async_context: (allow-none): the #GMainContext to dispatch the I/O
- * watch in, or %NULL for the default context
- * @function: the callback to invoke at idle time
- * @data: user data to pass to @function
- *
- * Adds an idle event as with g_idle_add(), but using the given
- * @async_context.
- *
- * If you want @function to run "right away", use
- * soup_add_completion(), since that sets a higher priority on the
- * #GSource than soup_add_idle() does.
- *
- * Return value: a #GSource, which can be removed from @async_context
- * with g_source_destroy().
- **/
-GSource *
-soup_add_idle (GMainContext *async_context,
-	       GSourceFunc function, gpointer data)
-{
-	GSource *source = g_idle_source_new ();
-	g_source_set_callback (source, function, data, NULL);
-	g_source_attach (source, async_context);
-	g_source_unref (source);
-	return source;
 }
 
 GSource *
@@ -131,9 +67,9 @@ soup_add_completion_reffed (GMainContext   *async_context,
 	return source;
 }
 
-/**
+/*
  * soup_add_completion: (skip)
- * @async_context: (allow-none): the #GMainContext to dispatch the I/O
+ * @async_context: (nullable): the #GMainContext to dispatch the I/O
  * watch in, or %NULL for the default context
  * @function: the callback to invoke
  * @data: user data to pass to @function
@@ -142,12 +78,8 @@ soup_add_completion_reffed (GMainContext   *async_context,
  * default priority. Use this when you want to complete an action in
  * @async_context's main loop, as soon as possible.
  *
- * Return value: a #GSource, which can be removed from @async_context
- * with g_source_destroy().
- *
- * Since: 2.24
- **/
-GSource *
+ */
+void
 soup_add_completion (GMainContext *async_context,
 	             GSourceFunc function, gpointer data)
 {
@@ -155,22 +87,21 @@ soup_add_completion (GMainContext *async_context,
 
 	source = soup_add_completion_reffed (async_context, function, data, NULL);
 	g_source_unref (source);
-	return source;
 }
 
 /**
  * soup_add_timeout: (skip)
- * @async_context: (allow-none): the #GMainContext to dispatch the I/O
- * watch in, or %NULL for the default context
+ * @async_context: (nullable): the #GMainContext to dispatch the I/O
+ *   watch in, or %NULL for the default context
  * @interval: the timeout interval, in milliseconds
  * @function: the callback to invoke at timeout time
  * @data: user data to pass to @function
  *
- * Adds a timeout as with g_timeout_add(), but using the given
+ * Adds a timeout as with [func@GLib.timeout_add], but using the given
  * @async_context.
  *
- * Return value: a #GSource, which can be removed from @async_context
- * with g_source_destroy().
+ * Returns: (transfer full): a #GSource, which can be removed from @async_context
+ *   with [method@GLib.Source.destroy].
  **/
 GSource *
 soup_add_timeout (GMainContext *async_context,
@@ -180,8 +111,19 @@ soup_add_timeout (GMainContext *async_context,
 	GSource *source = g_timeout_source_new (interval);
 	g_source_set_callback (source, function, data, NULL);
 	g_source_attach (source, async_context);
-	g_source_unref (source);
 	return source;
+}
+
+GMainContext *
+soup_thread_default_context (void)
+{
+        GMainContext *context;
+
+        context = g_main_context_get_thread_default ();
+        if (!context)
+                context = g_main_context_default ();
+
+        return context;
 }
 
 /* 00 URI_UNRESERVED
@@ -250,9 +192,8 @@ const char soup_char_attributes[] = {
  *
  * Checks if the @host and @compare_with exactly match or prefixed with a dot.
  *
- * Return value: %TRUE if the hosts match, %FALSE otherwise
+ * Returns: %TRUE if the hosts match, %FALSE otherwise
  *
- * Since: 2.54
  **/
 gboolean
 soup_host_matches_host (const gchar *host, const gchar *compare_with)
@@ -267,4 +208,100 @@ soup_host_matches_host (const gchar *host, const gchar *compare_with)
 	if (!g_ascii_strcasecmp (host + 1, compare_with))
 		return TRUE;
 	return g_str_has_suffix (compare_with, host);
+}
+
+/* Converts a language in POSIX format and to be RFC2616 compliant    */
+/* Based on code from epiphany-webkit (ephy_langs_append_languages()) */
+static gchar *
+posix_lang_to_rfc2616 (const gchar *language)
+{
+	/* Don't include charset variants, etc */
+	if (strchr (language, '.') || strchr (language, '@'))
+		return NULL;
+
+	/* Ignore "C" locale, which g_get_language_names() always
+	 * includes as a fallback.
+	 */
+	if (!strcmp (language, "C"))
+		return NULL;
+
+	return g_strdelimit (g_ascii_strdown (language, -1), "_", '-');
+}
+
+/* Converts @quality from 0-100 to 0.0-1.0 and appends to @str */
+static gchar *
+add_quality_value (const gchar *str, int quality)
+{
+	g_return_val_if_fail (str != NULL, NULL);
+
+	if (quality >= 0 && quality < 100) {
+		/* We don't use %.02g because of "." vs "," locale issues */
+		if (quality % 10)
+			return g_strdup_printf ("%s;q=0.%02d", str, quality);
+		else
+			return g_strdup_printf ("%s;q=0.%d", str, quality / 10);
+	} else
+		return g_strdup (str);
+}
+
+/* Returns a RFC2616 compliant languages list from system locales */
+gchar *
+soup_get_accept_languages_from_system (void)
+{
+	const char * const * lang_names;
+	GPtrArray *langs = NULL;
+	char *lang, *langs_str;
+	int delta;
+	guint i;
+
+	lang_names = g_get_language_names ();
+	g_return_val_if_fail (lang_names != NULL, NULL);
+
+	/* Build the array of languages */
+	langs = g_ptr_array_new_with_free_func (g_free);
+	for (i = 0; lang_names[i] != NULL; i++) {
+		lang = posix_lang_to_rfc2616 (lang_names[i]);
+		if (lang)
+			g_ptr_array_add (langs, lang);
+	}
+
+	/* Add quality values */
+	if (langs->len < 10)
+		delta = 10;
+	else if (langs->len < 20)
+		delta = 5;
+	else
+		delta = 1;
+
+	for (i = 0; i < langs->len; i++) {
+		lang = langs->pdata[i];
+		langs->pdata[i] = add_quality_value (lang, 100 - i * delta);
+		g_free (lang);
+	}
+
+	/* Fallback: add "en" if list is empty */
+	if (langs->len == 0)
+		g_ptr_array_add (langs, g_strdup ("en"));
+
+	g_ptr_array_add (langs, NULL);
+	langs_str = g_strjoinv (", ", (char **)langs->pdata);
+	g_ptr_array_free (langs, TRUE);
+
+	return langs_str;
+}
+
+const char *
+soup_http_version_to_string (SoupHTTPVersion version)
+{
+        switch (version) {
+        case SOUP_HTTP_1_0:
+                return "1.0";
+        case SOUP_HTTP_1_1:
+                return "1.1";
+        case SOUP_HTTP_2_0:
+                return "2";
+        }
+
+        g_assert_not_reached ();
+        return NULL;
 }

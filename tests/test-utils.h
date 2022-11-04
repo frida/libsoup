@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 
 #ifdef HAVE_CONFIG_H
 #include "config.h"
@@ -7,10 +7,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-#define LIBSOUP_USE_UNSTABLE_REQUEST_API
-
 #include "libsoup/soup.h"
-#include "libsoup/soup-requester.h"
 
 void test_init    (int argc, char **argv, GOptionEntry *entries);
 void test_cleanup (void);
@@ -27,6 +24,14 @@ void debug_printf (int level, const char *format, ...) G_GNUC_PRINTF (2, 3);
 			return;					\
 		}						\
 	} G_STMT_END
+
+#define SOUP_TEST_SKIP_IF_NO_IPV6                               \
+        G_STMT_START {                                          \
+                if (g_getenv ("SOUP_TEST_NO_IPV6")) {           \
+                        g_test_skip ("IPV6 is not available");  \
+                        return;                                 \
+                }                                               \
+        } G_STMT_END                                            \
 
 #ifdef HAVE_APACHE
 void apache_init    (void);
@@ -46,52 +51,60 @@ gboolean have_curl (void);
 
 typedef enum {
 	SOUP_TEST_REQUEST_NONE = 0,
-	SOUP_TEST_REQUEST_CANCEL_MESSAGE = (1 << 0),
-	SOUP_TEST_REQUEST_CANCEL_CANCELLABLE = (1 << 1),
-	SOUP_TEST_REQUEST_CANCEL_SOON = (1 << 2),
-	SOUP_TEST_REQUEST_CANCEL_IMMEDIATE = (1 << 3),
-	SOUP_TEST_REQUEST_CANCEL_PREEMPTIVE = (1 << 4),
-	SOUP_TEST_REQUEST_CANCEL_AFTER_SEND_FINISH = (1 << 5),
+	SOUP_TEST_REQUEST_CANCEL_SOON = (1 << 0),
+	SOUP_TEST_REQUEST_CANCEL_IMMEDIATE = (1 << 1),
+	SOUP_TEST_REQUEST_CANCEL_PREEMPTIVE = (1 << 2),
+	SOUP_TEST_REQUEST_CANCEL_AFTER_SEND_FINISH = (1 << 3),
+        SOUP_TEST_REQUEST_CANCEL_BY_SESSION = (1 << 4)
 } SoupTestRequestFlags;
 
-#undef SOUP_TYPE_SESSION_ASYNC
-#define SOUP_TYPE_SESSION_ASYNC (_soup_session_async_get_type_undeprecated ())
-#undef SOUP_TYPE_SESSION_SYNC
-#define SOUP_TYPE_SESSION_SYNC (_soup_session_sync_get_type_undeprecated ())
-
-SoupSession *soup_test_session_new         (GType type, ...);
-void         soup_test_session_abort_unref (SoupSession *session);
+SoupSession *soup_test_session_new                (const char   *propname, ...);
+void         soup_test_session_abort_unref        (SoupSession  *session);
+GBytes      *soup_test_session_async_send         (SoupSession  *session,
+						   SoupMessage  *msg,
+						   GCancellable *cancellable,
+						   GError      **error);
+guint        soup_test_session_send_message       (SoupSession  *session,
+						   SoupMessage  *msg);
 
 typedef enum {
 	SOUP_TEST_SERVER_DEFAULT             = 0,
 	SOUP_TEST_SERVER_IN_THREAD           = (1 << 0),
-	SOUP_TEST_SERVER_NO_DEFAULT_LISTENER = (1 << 1)
+	SOUP_TEST_SERVER_NO_DEFAULT_LISTENER = (1 << 1),
+	SOUP_TEST_SERVER_UNIX_SOCKET         = (1 << 2),
+        SOUP_TEST_SERVER_HTTP2               = (1 << 3)
 } SoupTestServerOptions;
 
 SoupServer  *soup_test_server_new            (SoupTestServerOptions  options);
-SoupURI     *soup_test_server_get_uri        (SoupServer            *server,
+const char  *soup_test_server_get_unix_path  (SoupServer            *server);
+void         soup_test_server_run_in_thread  (SoupServer            *server);
+GUri        *soup_test_server_get_uri        (SoupServer            *server,
 					      const char            *scheme,
 					      const char            *host);
 void         soup_test_server_quit_unref     (SoupServer            *server);
 
-GInputStream *soup_test_request_send         (SoupRequest  *req,
+GInputStream *soup_test_request_send         (SoupSession  *session,
+					      SoupMessage  *msg,
 					      GCancellable *cancellable,
 					      guint         flags,
 					      GError       **error);
-gboolean      soup_test_request_read_all     (SoupRequest   *req,
-					      GInputStream  *stream,
+gboolean      soup_test_request_read_all     (GInputStream  *stream,
 					      GCancellable  *cancellable,
 					      GError       **error);
-gboolean      soup_test_request_close_stream (SoupRequest   *req,
-					      GInputStream  *stream,
+gboolean      soup_test_request_close_stream (GInputStream  *stream,
 					      GCancellable  *cancellable,
 					      GError       **error);
 
 void        soup_test_register_resources (void);
-SoupBuffer *soup_test_load_resource      (const char  *name,
+GBytes     *soup_test_load_resource      (const char  *name,
 					  GError     **error);
 
-SoupBuffer *soup_test_get_index          (void);
+GBytes     *soup_test_get_index          (void);
+
+char       *soup_test_build_filename_abs (GTestFileType  file_type,
+                                          const gchar   *first_path,
+                                          ...);
+
 
 #ifdef G_HAVE_ISO_VARARGS
 #define soup_test_assert(expr, ...)				\
@@ -115,13 +128,31 @@ G_STMT_START {								\
 	guint _status = (status);					\
 	char *_message;							\
 									\
-	if (G_UNLIKELY (_msg->status_code != _status)) {		\
+	if (G_UNLIKELY (soup_message_get_status (_msg) != _status)) {		\
 		_message = g_strdup_printf ("Unexpected status %d %s (expected %d %s)", \
-					    _msg->status_code, _msg->reason_phrase,     \
+					    soup_message_get_status (_msg), soup_message_get_reason_phrase (_msg),     \
 					    _status, soup_status_get_phrase (_status)); \
 		g_assertion_message (G_LOG_DOMAIN,			\
 				     __FILE__, __LINE__, G_STRFUNC,	\
 				     _message);				\
+		g_free (_message);					\
+	}								\
+} G_STMT_END
+
+#define soup_test_assert_handled_by(msg, string)			\
+G_STMT_START {								\
+	SoupMessage *_msg = (msg);					\
+	const char *_handled_by;					\
+	const char *_expected = (char *) (string);			\
+	char *_message;							\
+	_handled_by = soup_message_headers_get_one (soup_message_get_response_headers (_msg), \
+	                                            "X-Handled-By"); 	\
+	if (G_UNLIKELY (g_strcmp0 (_handled_by, _expected) != 0)) {	\
+		_message = g_strdup_printf ("Request was handled by %s (expected %s)", \
+		                            _handled_by, _expected);	\
+		g_assertion_message (G_LOG_DOMAIN,			\
+		                     __FILE__, __LINE__, G_STRFUNC,	\
+		                     _message);				\
 		g_free (_message);					\
 	}								\
 } G_STMT_END

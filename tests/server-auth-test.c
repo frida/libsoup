@@ -1,11 +1,11 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2001-2003, Ximian, Inc.
  */
 
 #include "test-utils.h"
 
-static SoupURI *base_uri;
+static GUri *base_uri;
 
 static struct {
 	gboolean client_sent_basic, client_sent_digest;
@@ -23,26 +23,24 @@ curl_exited (GPid pid, int status, gpointer data)
 }
 
 static void
-do_test (SoupURI *base_uri, const char *path,
+do_test (GUri *base_uri, const char *path,
 	 gboolean good_user, gboolean good_password,
 	 gboolean offer_basic, gboolean offer_digest,
 	 gboolean client_sends_basic, gboolean client_sends_digest,
 	 gboolean server_requests_basic, gboolean server_requests_digest,
 	 gboolean success)
 {
-	SoupURI *uri;
+	GUri *uri;
 	char *uri_str;
 	GPtrArray *args;
 	GPid pid;
 	gboolean done;
 
-	/* We build the URI this way to avoid having soup_uri_new()
-	   normalize the path, hence losing the encoded characters in
-	   tests 4. and 5. below. */
-	uri = soup_uri_copy (base_uri);
-	soup_uri_set_path (uri, path);
-	uri_str = soup_uri_to_string (uri, FALSE);
-	soup_uri_free (uri);
+	/* Note that we purposefully do not pass G_URI_FLAGS_ENCODED_PATH here which would lose
+           the encoded characters in tests 4. and 5. below. */
+        uri = g_uri_parse_relative (base_uri, path, G_URI_FLAGS_NONE, NULL);
+	uri_str = g_uri_to_string (uri);
+	g_uri_unref (uri);
 
 	args = g_ptr_array_new ();
 	g_ptr_array_add (args, "curl");
@@ -212,7 +210,7 @@ do_server_auth_test (gconstpointer data)
 		 (TEST_USES_BASIC (i) || TEST_USES_DIGEST (i)) && TEST_GOOD_AUTH (i));
 
 	/* 8. No auth required again. (Makes sure that
-	 * SOUP_AUTH_DOMAIN_REMOVE_PATH works.)
+	 * SoupAuthDomain:remove-path works.)
 	 */
 	do_test (base_uri, "/Any/Not/foo",
 		 TEST_GOOD_USER (i), TEST_GOOD_PASSWORD (i),
@@ -227,15 +225,20 @@ do_server_auth_test (gconstpointer data)
 }
 
 static gboolean
-basic_auth_callback (SoupAuthDomain *auth_domain, SoupMessage *msg,
-		     const char *username, const char *password, gpointer data)
+basic_auth_callback (SoupAuthDomain    *auth_domain,
+		     SoupServerMessage *msg,
+		     const char        *username,
+		     const char        *password,
+		     gpointer           data)
 {
 	return !strcmp (username, "user") && !strcmp (password, "password");
 }
 
 static char *
-digest_auth_callback (SoupAuthDomain *auth_domain, SoupMessage *msg,
-		      const char *username, gpointer data)
+digest_auth_callback (SoupAuthDomain    *auth_domain,
+		      SoupServerMessage *msg,
+		      const char        *username,
+		      gpointer           data)
 {
 	if (strcmp (username, "user") != 0)
 		return NULL;
@@ -251,27 +254,33 @@ digest_auth_callback (SoupAuthDomain *auth_domain, SoupMessage *msg,
 }
 
 static void
-server_callback (SoupServer *server, SoupMessage *msg,
-		 const char *path, GHashTable *query,
-		 SoupClientContext *context, gpointer data)
+server_callback (SoupServer        *server,
+		 SoupServerMessage *msg,
+		 const char        *path,
+		 GHashTable        *query,
+		 gpointer           data)
 {
-	if (msg->method != SOUP_METHOD_GET && msg->method != SOUP_METHOD_HEAD) {
-		soup_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED);
+	const char *method;
+
+	method = soup_server_message_get_method (msg);
+	if (method != SOUP_METHOD_GET && method != SOUP_METHOD_HEAD) {
+		soup_server_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED, NULL);
 		return;
 	}
 
-	soup_message_set_response (msg, "text/plain",
-				   SOUP_MEMORY_STATIC,
-				   "OK\r\n", 4);
-	soup_message_set_status (msg, SOUP_STATUS_OK);
+	soup_server_message_set_response (msg, "text/plain",
+					  SOUP_MEMORY_STATIC,
+					  "OK\r\n", 4);
+	soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
 }
 
 static void
-got_headers_callback (SoupMessage *msg, gpointer data)
+got_headers_callback (SoupServerMessage *msg,
+		      gpointer           data)
 {
 	const char *header;
 
-	header = soup_message_headers_get_one (msg->request_headers,
+	header = soup_message_headers_get_one (soup_server_message_get_request_headers (msg),
 					       "Authorization");
 	if (header) {
 		if (strstr (header, "Basic "))
@@ -282,11 +291,12 @@ got_headers_callback (SoupMessage *msg, gpointer data)
 }
 
 static void
-wrote_headers_callback (SoupMessage *msg, gpointer data)
+wrote_headers_callback (SoupServerMessage *msg,
+			gpointer           data)
 {
 	const char *header;
 
-	header = soup_message_headers_get_list (msg->response_headers,
+	header = soup_message_headers_get_list (soup_server_message_get_response_headers (msg),
 						"WWW-Authenticate");
 	if (header) {
 		if (strstr (header, "Basic "))
@@ -297,12 +307,13 @@ wrote_headers_callback (SoupMessage *msg, gpointer data)
 }
 
 static void
-request_started_callback (SoupServer *server, SoupMessage *msg,
-			  SoupClientContext *client, gpointer data)
+request_started_callback (SoupServer        *server,
+			  SoupServerMessage *msg,
+			  gpointer           data)
 {
-	g_signal_connect (msg, "got_headers",
+	g_signal_connect (msg, "got-headers",
 			  G_CALLBACK (got_headers_callback), NULL);
-	g_signal_connect (msg, "wrote_headers",
+	g_signal_connect (msg, "wrote-headers",
 			  G_CALLBACK (wrote_headers_callback), NULL);
 }
 
@@ -332,22 +343,22 @@ main (int argc, char **argv)
 				 server_callback, NULL, NULL);
 
 	auth_domain = soup_auth_domain_basic_new (
-		SOUP_AUTH_DOMAIN_REALM, "server-auth-test",
-		SOUP_AUTH_DOMAIN_ADD_PATH, "/Basic",
-		SOUP_AUTH_DOMAIN_ADD_PATH, "/Any",
-		SOUP_AUTH_DOMAIN_REMOVE_PATH, "/Any/Not",
-		SOUP_AUTH_DOMAIN_BASIC_AUTH_CALLBACK, basic_auth_callback,
+		"realm", "server-auth-test",
+		"auth-callback", basic_auth_callback,
 		NULL);
+        soup_auth_domain_add_path (auth_domain, "/Basic");
+        soup_auth_domain_add_path (auth_domain, "/Any");
+        soup_auth_domain_remove_path (auth_domain, "/Any/Not");
 	soup_server_add_auth_domain (server, auth_domain);
 	g_object_unref (auth_domain);
 
 	auth_domain = soup_auth_domain_digest_new (
-		SOUP_AUTH_DOMAIN_REALM, "server-auth-test",
-		SOUP_AUTH_DOMAIN_ADD_PATH, "/Digest",
-		SOUP_AUTH_DOMAIN_ADD_PATH, "/Any",
-		SOUP_AUTH_DOMAIN_REMOVE_PATH, "/Any/Not",
-		SOUP_AUTH_DOMAIN_DIGEST_AUTH_CALLBACK, digest_auth_callback,
+		"realm", "server-auth-test",
+		"auth-callback", digest_auth_callback,
 		NULL);
+        soup_auth_domain_add_path (auth_domain, "/Digest");
+        soup_auth_domain_add_path (auth_domain, "/Any");
+        soup_auth_domain_remove_path (auth_domain, "/Any/Not");
 	soup_server_add_auth_domain (server, auth_domain);
 	g_object_unref (auth_domain);
 
@@ -386,11 +397,11 @@ main (int argc, char **argv)
 
 		ret = g_test_run ();
 	} else {
-		g_print ("Listening on port %d\n", base_uri->port);
+		g_print ("Listening on port %d\n", g_uri_get_port (base_uri));
 		g_main_loop_run (loop);
 		ret = 0;
 	}
-	soup_uri_free (base_uri);
+	g_uri_unref (base_uri);
 
 	g_main_loop_unref (loop);
 	soup_test_server_quit_unref (server);

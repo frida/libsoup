@@ -27,13 +27,6 @@ import sys
 import os
 import glob
 
-def check_php_module(modules_path):
-    php_modules = glob.glob(os.path.join(modules_path, 'libphp7*.so'));
-    if len(php_modules):
-        # The last one in the sorted output will be the desired php module.
-        return sorted(php_modules)[-1];
-
-
 def check_module(modules_path, module):
      module_path = os.path.join(modules_path, module)
      return os.path.isfile(module_path)
@@ -52,7 +45,7 @@ def check_required_basic_modules(modules_path):
         'mod_authz_user',
         'mod_dir',
         'mod_mime',
-        'mod_mpm_prefork',
+        'mod_mpm_event',
         'mod_proxy',
         'mod_proxy_http',
         'mod_proxy_connect'
@@ -105,8 +98,8 @@ def main():
 
     apache_modules_dir = ''
     apache_ssl_module_dir = ''
-    apache_php_module_file = ''
     apache_mod_unixd_module_file = ''
+    apache_http2_module_dir = ''
 
     for lib_dir in ['lib', 'lib64']:
         for httpd_dir in ['apache', 'apache2', 'http', 'http2', 'httpd']:
@@ -117,11 +110,10 @@ def main():
                         apache_modules_dir = modules_path
                     if check_module(modules_path, 'mod_ssl.so'):
                         apache_ssl_module_dir = modules_path
-                    php_module = check_php_module(modules_path)
-                    if (php_module):
-                        apache_php_module_file = php_module
                     if check_module(modules_path, 'mod_unixd.so'):
                         apache_mod_unixd_module_file = modules_path
+                    if check_module(modules_path, 'mod_http2.so'):
+                        apache_http2_module_dir = modules_path
 
     # These two are mandatory for having properly configured Apache
     if apache_modules_dir == '' or apache_ssl_module_dir == '':
@@ -129,8 +121,8 @@ def main():
 
     print(apache_modules_dir + ":" +
           apache_ssl_module_dir + ":" +
-          apache_php_module_file + ":" +
-          apache_mod_unixd_module_file, end='')
+          apache_mod_unixd_module_file + ":" +
+          apache_http2_module_dir, end='')
 
 if __name__ == "__main__":
     main()

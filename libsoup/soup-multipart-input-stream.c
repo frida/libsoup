@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-multipart-input-stream.c
  *
@@ -21,29 +21,36 @@
 #define RESPONSE_BLOCK_SIZE 8192
 
 /**
- * SECTION:soup-multipart-input-stream
- * @short_description: Multipart input handling stream
+ * SoupMultipartInputStream:
+ *
+ * Handles streams of multipart messages.
  *
  * This adds support for the multipart responses. For handling the
- * multiple parts the user needs to wrap the #GInputStream obtained by
- * sending the request with a #SoupMultipartInputStream and use
- * soup_multipart_input_stream_next_part() before reading. Responses
+ * multiple parts the user needs to wrap the [class@Gio.InputStream] obtained by
+ * sending the request with a [class@MultipartInputStream] and use
+ * [method@MultipartInputStream.next_part] before reading. Responses
  * which are not wrapped will be treated like non-multipart responses.
  *
- * Note that although #SoupMultipartInputStream is a #GInputStream,
+ * Note that although #SoupMultipartInputStream is a [class@Gio.InputStream],
  * you should not read directly from it, and the results are undefined
  * if you do.
- *
- * Since: 2.40
  **/
 
 enum {
 	PROP_0,
 
 	PROP_MESSAGE,
+
+        LAST_PROPERTY
 };
 
-struct _SoupMultipartInputStreamPrivate {
+static GParamSpec *properties[LAST_PROPERTY] = { NULL, };
+
+struct _SoupMultipartInputStream {
+	GFilterInputStream parent_instance;
+};
+
+typedef struct {
 	SoupMessage	        *msg;
 
 	gboolean	         done_with_part;
@@ -57,22 +64,23 @@ struct _SoupMultipartInputStreamPrivate {
 	gsize		         boundary_size;
 
 	goffset		        remaining_bytes;
-};
+} SoupMultipartInputStreamPrivate;
 
 static void soup_multipart_input_stream_pollable_init (GPollableInputStreamInterface *pollable_interface, gpointer interface_data);
 
-G_DEFINE_TYPE_WITH_CODE (SoupMultipartInputStream, soup_multipart_input_stream, G_TYPE_FILTER_INPUT_STREAM,
-                         G_ADD_PRIVATE (SoupMultipartInputStream)
-			 G_IMPLEMENT_INTERFACE (G_TYPE_POLLABLE_INPUT_STREAM,
-						soup_multipart_input_stream_pollable_init))
+G_DEFINE_FINAL_TYPE_WITH_CODE (SoupMultipartInputStream, soup_multipart_input_stream, G_TYPE_FILTER_INPUT_STREAM,
+                               G_ADD_PRIVATE (SoupMultipartInputStream)
+			       G_IMPLEMENT_INTERFACE (G_TYPE_POLLABLE_INPUT_STREAM,
+						      soup_multipart_input_stream_pollable_init))
 
 static void
 soup_multipart_input_stream_dispose (GObject *object)
 {
 	SoupMultipartInputStream *multipart = SOUP_MULTIPART_INPUT_STREAM (object);
+        SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 
-	g_clear_object (&multipart->priv->msg);
-	g_clear_object (&multipart->priv->base_stream);
+	g_clear_object (&priv->msg);
+	g_clear_object (&priv->base_stream);
 
 	G_OBJECT_CLASS (soup_multipart_input_stream_parent_class)->dispose (object);
 }
@@ -81,11 +89,12 @@ static void
 soup_multipart_input_stream_finalize (GObject *object)
 {
 	SoupMultipartInputStream *multipart = SOUP_MULTIPART_INPUT_STREAM (object);
+        SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 
-	g_free (multipart->priv->boundary);
+	g_free (priv->boundary);
 
-	if (multipart->priv->meta_buf)
-		g_clear_pointer (&multipart->priv->meta_buf, g_byte_array_unref);
+	if (priv->meta_buf)
+		g_clear_pointer (&priv->meta_buf, g_byte_array_unref);
 
 	G_OBJECT_CLASS (soup_multipart_input_stream_parent_class)->finalize (object);
 }
@@ -95,10 +104,11 @@ soup_multipart_input_stream_set_property (GObject *object, guint prop_id,
 					  const GValue *value, GParamSpec *pspec)
 {
 	SoupMultipartInputStream *multipart = SOUP_MULTIPART_INPUT_STREAM (object);
+        SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 
 	switch (prop_id) {
 	case PROP_MESSAGE:
-		multipart->priv->msg = g_value_dup_object (value);
+		priv->msg = g_value_dup_object (value);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -111,10 +121,11 @@ soup_multipart_input_stream_get_property (GObject *object, guint prop_id,
 					  GValue *value, GParamSpec *pspec)
 {
 	SoupMultipartInputStream *multipart = SOUP_MULTIPART_INPUT_STREAM (object);
+        SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 
 	switch (prop_id) {
 	case PROP_MESSAGE:
-		g_value_set_object (value, multipart->priv->msg);
+		g_value_set_object (value, priv->msg);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -131,7 +142,7 @@ soup_multipart_input_stream_read_real (GInputStream	*stream,
 				       GError          **error)
 {
 	SoupMultipartInputStream *multipart = SOUP_MULTIPART_INPUT_STREAM (stream);
-	SoupMultipartInputStreamPrivate *priv = multipart->priv;
+        SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 	gboolean got_boundary = FALSE;
 	gssize nread = 0;
 	guint8 *buf;
@@ -201,8 +212,7 @@ soup_multipart_input_stream_read (GInputStream	*stream,
 static void
 soup_multipart_input_stream_init (SoupMultipartInputStream *multipart)
 {
-	SoupMultipartInputStreamPrivate *priv;
-	priv = multipart->priv = soup_multipart_input_stream_get_instance_private (multipart);
+	SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 
 	priv->meta_buf = g_byte_array_sized_new (RESPONSE_BLOCK_SIZE);
 	priv->done_with_part = FALSE;
@@ -211,19 +221,16 @@ soup_multipart_input_stream_init (SoupMultipartInputStream *multipart)
 static void
 soup_multipart_input_stream_constructed (GObject *object)
 {
-	SoupMultipartInputStream *multipart;
-	SoupMultipartInputStreamPrivate *priv;
+	SoupMultipartInputStream *multipart = (SoupMultipartInputStream*)object;
+	SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 	GInputStream *base_stream;
 	const char* boundary;
 	GHashTable *params = NULL;
 
-	multipart = SOUP_MULTIPART_INPUT_STREAM (object);
-	priv = multipart->priv;
-
 	base_stream = G_FILTER_INPUT_STREAM (multipart)->base_stream;
 	priv->base_stream = SOUP_FILTER_INPUT_STREAM (soup_filter_input_stream_new (base_stream));
 
-	soup_message_headers_get_content_type (priv->msg->response_headers,
+	soup_message_headers_get_content_type (soup_message_get_response_headers (priv->msg),
 					       &params);
 
 	boundary = g_hash_table_lookup (params, "boundary");
@@ -248,7 +255,7 @@ static gboolean
 soup_multipart_input_stream_is_readable (GPollableInputStream *stream)
 {
 	SoupMultipartInputStream *multipart = SOUP_MULTIPART_INPUT_STREAM (stream);
-	SoupMultipartInputStreamPrivate *priv = multipart->priv;
+	SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 
 	return g_pollable_input_stream_is_readable (G_POLLABLE_INPUT_STREAM (priv->base_stream));
 }
@@ -271,7 +278,7 @@ soup_multipart_input_stream_create_source (GPollableInputStream *stream,
 					   GCancellable         *cancellable)
 {
 	SoupMultipartInputStream *multipart = SOUP_MULTIPART_INPUT_STREAM (stream);
-	SoupMultipartInputStreamPrivate *priv = multipart->priv;
+	SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 	GSource *base_source, *pollable_source;
 
 	base_source = g_pollable_input_stream_create_source (G_POLLABLE_INPUT_STREAM (priv->base_stream), cancellable);
@@ -297,14 +304,21 @@ soup_multipart_input_stream_class_init (SoupMultipartInputStreamClass *multipart
 
 	input_stream_class->read_fn = soup_multipart_input_stream_read;
 
-	g_object_class_install_property (
-		object_class, PROP_MESSAGE,
+        /**
+         * SoupMultipartInputStream:message:
+         *
+         * The [class@Message].
+         */
+        properties[PROP_MESSAGE] =
 		g_param_spec_object ("message",
 				     "Message",
 				     "The SoupMessage",
 				     SOUP_TYPE_MESSAGE,
-				     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
-				     G_PARAM_STATIC_STRINGS));
+				     G_PARAM_READWRITE |
+                                     G_PARAM_CONSTRUCT_ONLY |
+				     G_PARAM_STATIC_STRINGS);
+
+        g_object_class_install_properties (object_class, LAST_PROPERTY, properties);
 
 }
 
@@ -320,7 +334,7 @@ soup_multipart_input_stream_pollable_init (GPollableInputStreamInterface *pollab
 static void
 soup_multipart_input_stream_parse_headers (SoupMultipartInputStream *multipart)
 {
-	SoupMultipartInputStreamPrivate *priv = multipart->priv;
+	SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 	gboolean success;
 
 	priv->current_headers = soup_message_headers_new (SOUP_MESSAGE_HEADERS_MULTIPART);
@@ -336,7 +350,7 @@ soup_multipart_input_stream_parse_headers (SoupMultipartInputStream *multipart)
 	if (success)
 		priv->remaining_bytes = soup_message_headers_get_content_length (priv->current_headers);
 	else
-		g_clear_pointer (&priv->current_headers, soup_message_headers_free);
+		g_clear_pointer (&priv->current_headers, soup_message_headers_unref);
 
 	g_byte_array_remove_range (priv->meta_buf, 0, priv->meta_buf->len);
 }
@@ -346,7 +360,7 @@ soup_multipart_input_stream_read_headers (SoupMultipartInputStream  *multipart,
 					  GCancellable		    *cancellable,
 					  GError		   **error)
 {
-	SoupMultipartInputStreamPrivate *priv = multipart->priv;
+	SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 	guchar read_buf[RESPONSE_BLOCK_SIZE];
 	guchar *buf;
 	gboolean got_boundary = FALSE;
@@ -355,7 +369,7 @@ soup_multipart_input_stream_read_headers (SoupMultipartInputStream  *multipart,
 
 	g_return_val_if_fail (priv->boundary != NULL, TRUE);
 
-	g_clear_pointer (&priv->current_headers, soup_message_headers_free);
+	g_clear_pointer (&priv->current_headers, soup_message_headers_unref);
 
 	while (1) {
 		nread = soup_filter_input_stream_read_line (priv->base_stream, read_buf, sizeof (read_buf),
@@ -418,14 +432,13 @@ soup_multipart_input_stream_read_headers (SoupMultipartInputStream  *multipart,
  * @base_stream: the #GInputStream returned by sending the request.
  *
  * Creates a new #SoupMultipartInputStream that wraps the
- * #GInputStream obtained by sending the #SoupRequest. Reads should
- * not be done directly through this object, use the input streams
- * returned by soup_multipart_input_stream_next_part() or its async
+ * [class@Gio.InputStream] obtained by sending the [class@Message].
+ *
+ * Reads should not be done directly through this object, use the input streams
+ * returned by [method@MultipartInputStream.next_part] or its async
  * counterpart instead.
  *
  * Returns: a new #SoupMultipartInputStream
- *
- * Since: 2.40
  **/
 SoupMultipartInputStream *
 soup_multipart_input_stream_new (SoupMessage  *msg,
@@ -443,34 +456,34 @@ soup_multipart_input_stream_new (SoupMessage  *msg,
  * @cancellable: a #GCancellable
  * @error: a #GError
  *
- * Obtains an input stream for the next part. When dealing with a
- * multipart response the input stream needs to be wrapped in a
- * #SoupMultipartInputStream and this function or its async
- * counterpart need to be called to obtain the first part for
- * reading.
+ * Obtains an input stream for the next part.
+ *
+ * When dealing with a multipart response the input stream needs to be wrapped
+ * in a #SoupMultipartInputStream and this function or its async counterpart
+ * need to be called to obtain the first part for reading.
  *
  * After calling this function,
- * soup_multipart_input_stream_get_headers() can be used to obtain the
+ * [method@MultipartInputStream.get_headers] can be used to obtain the
  * headers for the first part. A read of 0 bytes indicates the end of
  * the part; a new call to this function should be done at that point,
  * to obtain the next part.
  *
- * Return value: (nullable) (transfer full): a new #GInputStream, or
- * %NULL if there are no more parts
- *
- * Since: 2.40
+ * Returns: (nullable) (transfer full): a new #GInputStream, or
+ *   %NULL if there are no more parts
  */
 GInputStream *
 soup_multipart_input_stream_next_part (SoupMultipartInputStream  *multipart,
 				       GCancellable	         *cancellable,
 				       GError                   **error)
 {
+        SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
+
 	if (!soup_multipart_input_stream_read_headers (multipart, cancellable, error))
 		return NULL;
 
 	soup_multipart_input_stream_parse_headers (multipart);
 
-	multipart->priv->done_with_part = FALSE;
+	priv->done_with_part = FALSE;
 
 	return G_INPUT_STREAM (g_object_new (SOUP_TYPE_BODY_INPUT_STREAM,
 					     "base-stream", G_INPUT_STREAM (multipart),
@@ -508,11 +521,9 @@ soup_multipart_input_stream_next_part_thread (GTask        *task,
  * @callback: callback to call when request is satisfied.
  * @data: data for @callback
  *
- * Obtains a #GInputStream for the next request. See
- * soup_multipart_input_stream_next_part() for details on the
- * workflow.
+ * Obtains a [class@Gio.InputStream] for the next request.
  *
- * Since: 2.40
+ * See [method@MultipartInputStream.next_part] for details on the workflow.
  */
 void
 soup_multipart_input_stream_next_part_async (SoupMultipartInputStream *multipart,
@@ -548,11 +559,9 @@ soup_multipart_input_stream_next_part_async (SoupMultipartInputStream *multipart
  *
  * Finishes an asynchronous request for the next part.
  *
- * Return value: (nullable) (transfer full): a newly created
- * #GInputStream for reading the next part or %NULL if there are no
- * more parts.
- *
- * Since: 2.40
+ * Returns: (nullable) (transfer full): a newly created
+ *   [class@Gio.InputStream] for reading the next part or %NULL if there are no
+ *   more parts.
  */
 GInputStream *
 soup_multipart_input_stream_next_part_finish (SoupMultipartInputStream	*multipart,
@@ -568,24 +577,23 @@ soup_multipart_input_stream_next_part_finish (SoupMultipartInputStream	*multipar
  * soup_multipart_input_stream_get_headers:
  * @multipart: a #SoupMultipartInputStream.
  *
- * Obtains the headers for the part currently being processed. Note
- * that the #SoupMessageHeaders that are returned are owned by the
- * #SoupMultipartInputStream and will be replaced when a call is made
- * to soup_multipart_input_stream_next_part() or its async
- * counterpart, so if keeping the headers is required, a copy must be
- * made.
+ * Obtains the headers for the part currently being processed.
  *
- * Note that if a part had no headers at all an empty #SoupMessageHeaders
+ * Note that the [struct@MessageHeaders] that are returned are owned by the
+ * #SoupMultipartInputStream and will be replaced when a call is made to
+ * [method@MultipartInputStream.next_part] or its async counterpart, so if
+ * keeping the headers is required, a copy must be made.
+ *
+ * Note that if a part had no headers at all an empty [struct@MessageHeaders]
  * will be returned.
  *
- * Return value: (nullable) (transfer none): a #SoupMessageHeaders
- * containing the headers for the part currently being processed or
- * %NULL if the headers failed to parse.
- *
- * Since: 2.40
+ * Returns: (nullable) (transfer none): a #SoupMessageHeaders
+ *   containing the headers for the part currently being processed or
+ *   %NULL if the headers failed to parse.
  */
 SoupMessageHeaders *
 soup_multipart_input_stream_get_headers (SoupMultipartInputStream *multipart)
 {
-	return multipart->priv->current_headers;
+        SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
+	return priv->current_headers;
 }

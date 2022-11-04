@@ -7,10 +7,10 @@ abs_installed_tests_execdir = join_paths(prefix, installed_tests_execdir)
 
 if cc.get_id() == 'msvc'
   test_utils = static_library(test_utils_name, test_utils_name + '.c',
-    dependencies : libsoup_dep)
+    dependencies : [ libsoup_static_dep, unix_socket_dep ])
 else
   test_utils = library(test_utils_name, test_utils_name + '.c',
-    dependencies : libsoup_dep,
+    dependencies : [ libsoup_static_dep, unix_socket_dep ],
     install : installed_tests_enabled,
     install_dir : installed_tests_execdir,
   )
@@ -23,54 +23,93 @@ test_resources = gnome.compile_resources('soup-tests',
   install_dir : installed_tests_execdir,
 )
 
+if gnutls_dep.found()
+  mock_pkcs11_module = shared_module('mock-pkcs11',
+      sources: 'mock-pkcs11.c',
+      name_prefix: '',
+      gnu_symbol_visibility: 'hidden',
+      include_directories: include_directories('pkcs11'),
+      dependencies: [
+        gio_dep,
+        gnutls_dep,
+      ],
+      install: installed_tests_enabled,
+      install_dir: installed_tests_execdir
+    )
+else
+  mock_pkcs11_module = []
+endif
+
+configure_file(input : 'index.txt',
+  output : 'index.txt',
+  copy : true)
+configure_file(input : 'test-cert.pem',
+  output : 'test-cert.pem',
+  copy : true)
+configure_file(input : 'test-key.pem',
+  output : 'test-key.pem',
+  copy : true)
+configure_file(input : 'test-cert-2.pem',
+  output : 'test-cert-2.pem',
+  copy : true)
+configure_file(input : 'test-key-2.pem',
+  output : 'test-key-2.pem',
+  copy : true)
+
 if installed_tests_enabled
   install_data(
     'index.txt',
     'test-cert.pem',
     'test-key.pem',
+    'test-cert-2.pem',
+    'test-key-2.pem',
     install_dir : installed_tests_execdir
   )
 endif
 
 # ['name', is_parallel, extra_deps]
 tests = [
-  ['cache', true, []],
-  ['chunk', true, []],
-  ['chunk-io', true, []],
-  ['coding', true, []],
-  ['context', true, []],
-  ['continue', true, []],
-  ['cookies', true, []],
-  ['date', true, []],
-  ['forms', true, []],
-  ['header-parsing', true, []],
-  ['hsts', true, []],
-  ['hsts-db', true, []],
-  ['misc', true, []],
-  ['multipart', true, []],
-  ['no-ssl', true, []],
-  ['ntlm', true, []],
-  ['redirect', true, []],
-  ['requester', true, []],
-  ['resource', true, []],
-  ['samesite', true, []],
-  ['session', true, []],
-  ['server-auth', true, []],
-  ['server', true, []],
-  ['sniffing', true, []],
-  ['socket', true, []],
-  ['ssl', true, []],
-  ['streaming', true, []],
-  ['timeout', true, []],
-  ['tld', true, []],
-  ['uri-parsing', true, []],
-  ['websocket', true, [libz_dep]]
+  {'name': 'cache'},
+  {'name': 'chunk-io'},
+  {'name': 'coding'},
+  {'name': 'context'},
+  {'name': 'continue'},
+  {'name': 'cookies'},
+  {'name': 'date'},
+  {'name': 'forms'},
+  {'name': 'header-parsing'},
+  {'name': 'http2'},
+  {'name': 'http2-body-stream'},
+  {'name': 'hsts'},
+  {'name': 'hsts-db'},
+  {'name': 'logger'},
+  {'name': 'misc'},
+  {'name': 'multipart'},
+  {'name': 'multithread'},
+  {'name': 'no-ssl'},
+  {'name': 'ntlm'},
+  {'name': 'redirect'},
+  {'name': 'request-body'},
+  {'name': 'samesite'},
+  {'name': 'session'},
+  {'name': 'server-auth'},
+  {'name': 'server'},
+  {'name': 'sniffing'},
+  {'name': 'ssl',
+   'dependencies': [gnutls_dep],
+   'depends': mock_pkcs11_module,
+   'c_args': '-DHAVE_GNUTLS=@0@'.format(gnutls_dep.found() ? 1 : 0),
+  },
+  {'name': 'streaming'},
+  {'name': 'timeout'},
+  {'name': 'tld'},
+  {'name': 'uri-parsing'},
+  {'name': 'websocket',
+   'dependencies': [libz_dep]},
 ]
 
 if brotlidec_dep.found()
-  tests += [
-    ['brotli-decompressor', true, []],
-  ]
+  tests += [{'name': 'brotli-decompressor'}]
 
   if installed_tests_enabled
     install_data(
@@ -82,13 +121,19 @@ if brotlidec_dep.found()
   endif
 endif
 
+if unix_socket_dep.found()
+  tests += [{
+    'name': 'unix-socket',
+    'dependencies': [unix_socket_dep],
+  }]
+endif
+
 if have_apache
   tests += [
-    ['auth', false, []],
-    ['connection', false, []],
-    ['range', false, []],
-    ['proxy', false, []],
-    ['pull-api', false, []],
+    {'name': 'auth', 'parallel': false},
+    {'name': 'connection', 'parallel': false},
+    {'name': 'range', 'parallel': false},
+    {'name': 'proxy', 'parallel': false},
   ]
 
   configure_file(output : 'httpd.conf',
@@ -104,49 +149,11 @@ if have_apache
   configure_file(input : 'htpasswd',
     output : 'htpasswd',
     copy : true)
-  configure_file(input : 'index.txt',
-    output : 'index.txt',
-    copy : true)
-  configure_file(input : 'test-cert.pem',
-    output : 'test-cert.pem',
-    copy : true)
-  configure_file(input : 'test-key.pem',
-    output : 'test-key.pem',
-    copy : true)
 
   if installed_tests_enabled
     install_data(
       'htdigest',
       'htpasswd',
-      install_dir : installed_tests_execdir,
-    )
-  endif
-endif
-
-if have_php
-  configure_file(output : 'php.ini',
-    input : 'php.ini.in',
-    configuration : cdata,
-    install : installed_tests_enabled,
-    install_dir : installed_tests_execdir,
-  )
-endif
-
-if have_php_xmlrpc
-  tests += [
-    ['xmlrpc-old-server', true, []],
-    ['xmlrpc-old', false, []],
-    ['xmlrpc-server', true, []],
-    ['xmlrpc', false, []]
-  ]
-
-  configure_file(input : 'xmlrpc-server.php',
-    output : 'xmlrpc-server.php',
-    copy : true)
-
-  if installed_tests_enabled
-    install_data(
-      'xmlrpc-server.php',
       install_dir : installed_tests_execdir,
     )
   endif
@@ -162,15 +169,23 @@ env.set('MALLOC_CHECK_', '2')
 # This is set by Meson if empty
 env.set('MALLOC_PERTURB_', '')
 
+if meson.version().version_compare('>= 0.58.0')
+  meson.add_devenv(env)
+endif
+
+if have_autobahn
+   subdir('autobahn')
+endif
+
 foreach test: tests
-  test_name = '@0@-test'.format(test[0])
+  test_name = '@0@-test'.format(test['name'])
 
   if installed_tests_enabled
     test_conf = configuration_data()
     test_conf.set('installed_tests_dir', abs_installed_tests_execdir)
     test_conf.set('program', test_name)
     test_conf.set('env', '')
-    test_conf.set('type', test[1] ? 'session' : 'session-exclusive')
+    test_conf.set('type', test.get('parallel', true) ? 'session' : 'session-exclusive')
     configure_file(
       input : installed_tests_template_tap,
       output : test_name + '.test',
@@ -179,9 +194,11 @@ foreach test: tests
     )
   endif
 
-  test_deps = [ libsoup_dep ] + test[2]
+  test_deps = [ libsoup_static_dep ] + test.get('dependencies', [])
   test_target = executable(test_name,
     sources : [ test_name + '.c', test_resources ],
+    c_args : test.get('c_args', []),
+    include_directories : test.get('includes', []),
     link_with : test_utils,
     dependencies : test_deps,
     install : installed_tests_enabled,
@@ -190,7 +207,14 @@ foreach test: tests
   )
   # Increase the timeout as on some architectures the tests could be slower
   # than the default 30 seconds.
-  test(test_name, test_target, env : env, is_parallel : test[1], timeout : 60)
+  test(test_name, test_target,
+    args : ['--debug'],
+    env : env,
+    is_parallel : test.get('parallel', true),
+    depends : test.get('depends', []),
+    timeout : 60,
+    protocol : 'tap',
+  )
 endforeach
 
 executable('ntlm-test-helper', 'ntlm-test-helper.c',

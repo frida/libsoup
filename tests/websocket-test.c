@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * This file was originally part of Cockpit.
  *
@@ -19,7 +19,8 @@
  */
 
 #include "test-utils.h"
-
+#include "soup-message-private.h"
+#include "soup-server-message-private.h"
 #include <zlib.h>
 
 typedef struct {
@@ -50,6 +51,7 @@ typedef struct {
 	while (!(cond)) g_main_context_iteration (NULL, TRUE);	\
 	G_STMT_END
 
+/* LCOV_EXCL_START */
 static void
 on_error_not_reached (SoupWebsocketConnection *ws,
                       GError *error,
@@ -58,6 +60,7 @@ on_error_not_reached (SoupWebsocketConnection *ws,
 	/* At this point we know this will fail, but is informative */
 	g_assert_no_error (error);
 }
+/* LCOV_EXCL_STOP */
 
 static void
 on_error_copy (SoupWebsocketConnection *ws,
@@ -105,7 +108,7 @@ direct_connection_complete (GObject *object,
 {
 	Test *test = user_data;
 	GSocketConnection *conn;
-	SoupURI *uri;
+	GUri *uri;
 	GError *error = NULL;
 	GList *extensions = NULL;
 
@@ -113,7 +116,7 @@ direct_connection_complete (GObject *object,
 						       result, &error);
 	g_assert_no_error (error);
 
-	uri = soup_uri_new ("http://127.0.0.1/");
+	uri = g_uri_parse ("http://127.0.0.1/", SOUP_HTTP_URI_FLAGS, NULL);
 	if (test->enable_extensions) {
 		SoupWebsocketExtension *extension;
 
@@ -123,11 +126,11 @@ direct_connection_complete (GObject *object,
 								   NULL, NULL));
 		extensions = g_list_prepend (extensions, extension);
 	}
-	test->client = soup_websocket_connection_new_with_extensions (G_IO_STREAM (conn), uri,
-								      SOUP_WEBSOCKET_CONNECTION_CLIENT,
-								      NULL, NULL,
-								      extensions);
-	soup_uri_free (uri);
+	test->client = soup_websocket_connection_new (G_IO_STREAM (conn), uri,
+						      SOUP_WEBSOCKET_CONNECTION_CLIENT,
+						      NULL, NULL,
+						      extensions);
+	g_uri_unref (uri);
 	g_object_unref (conn);
 }
 
@@ -139,7 +142,7 @@ got_connection (GSocket *listener,
 	Test *test = user_data;
 	GSocket *sock;
 	GSocketConnection *conn;
-	SoupURI *uri;
+	GUri *uri;
 	GList *extensions = NULL;
 	GError *error = NULL;
 
@@ -153,7 +156,7 @@ got_connection (GSocket *listener,
 	if (test->no_server)
 		test->raw_server = G_IO_STREAM (conn);
 	else {
-		uri = soup_uri_new ("http://127.0.0.1/");
+		uri = g_uri_parse ("http://127.0.0.1/", SOUP_HTTP_URI_FLAGS, NULL);
 		if (test->enable_extensions) {
 			SoupWebsocketExtension *extension;
 
@@ -163,11 +166,11 @@ got_connection (GSocket *listener,
 									   NULL, NULL));
 			extensions = g_list_prepend (extensions, extension);
 		}
-		test->server = soup_websocket_connection_new_with_extensions (G_IO_STREAM (conn), uri,
-									      SOUP_WEBSOCKET_CONNECTION_SERVER,
-									      NULL, NULL,
-									      extensions);
-		soup_uri_free (uri);
+		test->server = soup_websocket_connection_new (G_IO_STREAM (conn), uri,
+							      SOUP_WEBSOCKET_CONNECTION_SERVER,
+							      NULL, NULL,
+							      extensions);
+		g_uri_unref (uri);
 		g_object_unref (conn);
 	}
 
@@ -266,7 +269,7 @@ client_connect (Test *test,
 	SoupCookieJar *jar;
 	GList *l;
 
-	test->session = soup_test_session_new (SOUP_TYPE_SESSION, NULL);
+	test->session = soup_test_session_new (NULL);
 	if (test->enable_extensions)
 		soup_session_add_feature_by_type (test->session, SOUP_TYPE_WEBSOCKET_EXTENSION_MANAGER);
 
@@ -286,14 +289,15 @@ client_connect (Test *test,
 
 	soup_session_websocket_connect_async (test->session, test->msg,
 					      origin, (char **) protocols,
+					      G_PRIORITY_DEFAULT,
 					      NULL, callback, user_data);
 }
 
 static void
 got_server_connection (SoupServer              *server,
-		       SoupWebsocketConnection *connection,
+		       SoupServerMessage       *msg,
 		       const char              *path,
-		       SoupClientContext       *client,
+		       SoupWebsocketConnection *connection,
 		       gpointer                 user_data)
 {
 	Test *test = user_data;
@@ -306,10 +310,12 @@ got_client_connection (GObject *object,
 		       GAsyncResult *result,
 		       gpointer user_data)
 {
+	SoupSession *session = SOUP_SESSION (object);
 	Test *test = user_data;
 
-	test->client = soup_session_websocket_connect_finish (SOUP_SESSION (object),
-							      result, &test->client_error);
+	g_assert_true (soup_session_get_async_result_message (session, result) == test->msg);
+
+	test->client = soup_session_websocket_connect_finish (session, result, &test->client_error);
 }
 
 static void
@@ -415,10 +421,12 @@ test_handshake (Test *test,
 }
 
 static void
-websocket_server_request_started (SoupServer *server, SoupMessage *msg,
-				  SoupClientContext *client, gpointer user_data)
+websocket_server_request_started (SoupServer        *server,
+				  SoupServerMessage *msg,
+				  gpointer           user_data)
 {
-	soup_message_headers_append (msg->response_headers, "Sec-WebSocket-Extensions", "x-foo");
+	soup_message_headers_append (soup_server_message_get_response_headers (msg),
+				     "Sec-WebSocket-Extensions", "x-foo");
 }
 
 static void
@@ -448,7 +456,7 @@ test_handshake_unsupported_extension (Test *test,
 	soup_server_add_websocket_handler (test->soup_server, "/unix", NULL, NULL,
 					   got_server_connection, test, NULL);
 
-	test->session = soup_test_session_new (SOUP_TYPE_SESSION, NULL);
+	test->session = soup_test_session_new (NULL);
 	g_signal_connect (test->session, "request-unqueued",
 			  G_CALLBACK (request_unqueued),
 			  test);
@@ -456,7 +464,8 @@ test_handshake_unsupported_extension (Test *test,
         test->msg = soup_message_new ("GET", url);
         g_free (url);
 
-	soup_session_websocket_connect_async (test->session, test->msg, NULL, NULL, NULL,
+	soup_session_websocket_connect_async (test->session, test->msg, NULL, NULL,
+					      G_PRIORITY_DEFAULT, NULL,
 					      got_client_connection, test);
 	WAIT_UNTIL (test->server != NULL);
 	WAIT_UNTIL (test->msg == NULL);
@@ -639,32 +648,53 @@ test_protocol_negotiate_direct (Test *test,
 				gconstpointer unused)
 {
 	SoupMessage *msg;
+	SoupServerMessage *server_msg;
+	SoupMessageHeaders *request_headers;
+	SoupMessageHeaders *response_headers;
+	SoupMessageHeadersIter iter;
+	const char *name, *value;
 	gboolean ok;
 	const char *protocol;
 	GError *error = NULL;
 
 	msg = soup_message_new ("GET", "http://127.0.0.1");
 	soup_websocket_client_prepare_handshake (msg, NULL,
-						 (char **) negotiate_client_protocols);
+						 (char **) negotiate_client_protocols,
+						 NULL);
 
-	ok = soup_websocket_server_check_handshake (msg, NULL,
+	server_msg = g_object_new (SOUP_TYPE_SERVER_MESSAGE, NULL);
+	soup_server_message_set_method (server_msg, soup_message_get_method (msg));
+	soup_server_message_set_uri (server_msg, soup_message_get_uri (msg));
+	request_headers = soup_server_message_get_request_headers (server_msg);
+	soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (request_headers, name, value);
+	ok = soup_websocket_server_check_handshake (server_msg, NULL,
 						    (char **) negotiate_server_protocols,
+						    NULL,
 						    &error);
 	g_assert_no_error (error);
 	g_assert_true (ok);
 
-	ok = soup_websocket_server_process_handshake (msg, NULL,
-						      (char **) negotiate_server_protocols);
+	ok = soup_websocket_server_process_handshake (server_msg, NULL,
+						      (char **) negotiate_server_protocols,
+						      NULL, NULL);
 	g_assert_true (ok);
 
-	protocol = soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Protocol");
+        soup_message_set_status (msg, soup_server_message_get_status (server_msg), NULL);
+	response_headers = soup_server_message_get_response_headers (server_msg);
+	soup_message_headers_iter_init (&iter, response_headers);
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (soup_message_get_response_headers (msg), name, value);
+	protocol = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Sec-WebSocket-Protocol");
 	g_assert_cmpstr (protocol, ==, negotiated_protocol);
 
-	ok = soup_websocket_client_verify_handshake (msg, &error);
+	ok = soup_websocket_client_verify_handshake (msg, NULL, NULL, &error);
 	g_assert_no_error (error);
 	g_assert_true (ok);
 
 	g_object_unref (msg);
+	g_object_unref (server_msg);
 }
 
 static void
@@ -689,35 +719,55 @@ test_protocol_mismatch_direct (Test *test,
 			       gconstpointer unused)
 {
 	SoupMessage *msg;
+	SoupServerMessage *server_msg;
+	SoupMessageHeaders *request_headers;
+	SoupMessageHeaders *response_headers;
+	SoupMessageHeadersIter iter;
+	const char *name, *value;
 	gboolean ok;
 	const char *protocol;
 	GError *error = NULL;
 
 	msg = soup_message_new ("GET", "http://127.0.0.1");
 	soup_websocket_client_prepare_handshake (msg, NULL,
-						 (char **) mismatch_client_protocols);
+						 (char **) mismatch_client_protocols,
+						 NULL);
 
-	ok = soup_websocket_server_check_handshake (msg, NULL,
+	server_msg = g_object_new (SOUP_TYPE_SERVER_MESSAGE, NULL);
+	soup_server_message_set_method (server_msg, soup_message_get_method (msg));
+	soup_server_message_set_uri (server_msg, soup_message_get_uri (msg));
+	request_headers = soup_server_message_get_request_headers (server_msg);
+	soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (request_headers, name, value);
+	ok = soup_websocket_server_check_handshake (server_msg, NULL,
 						    (char **) mismatch_server_protocols,
-						    &error);
+						    NULL, &error);
 	g_assert_error (error, SOUP_WEBSOCKET_ERROR, SOUP_WEBSOCKET_ERROR_BAD_HANDSHAKE);
 	g_clear_error (&error);
 	g_assert_false (ok);
 
-	ok = soup_websocket_server_process_handshake (msg, NULL,
-						      (char **) mismatch_server_protocols);
+	ok = soup_websocket_server_process_handshake (server_msg, NULL,
+						      (char **) mismatch_server_protocols,
+						      NULL, NULL);
 	g_assert_false (ok);
+	soup_message_set_status (msg, soup_server_message_get_status (server_msg), NULL);
 	soup_test_assert_message_status (msg, SOUP_STATUS_BAD_REQUEST);
 
-	protocol = soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Protocol");
+	response_headers = soup_server_message_get_response_headers (server_msg);
+	soup_message_headers_iter_init (&iter, response_headers);
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (soup_message_get_response_headers (msg), name, value);
+	protocol = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Sec-WebSocket-Protocol");
 	g_assert_cmpstr (protocol, ==, NULL);
 
-	ok = soup_websocket_client_verify_handshake (msg, &error);
+	ok = soup_websocket_client_verify_handshake (msg, NULL, NULL, &error);
 	g_assert_error (error, SOUP_WEBSOCKET_ERROR, SOUP_WEBSOCKET_ERROR_BAD_HANDSHAKE);
 	g_clear_error (&error);
 	g_assert_false (ok);
 
 	g_object_unref (msg);
+	g_object_unref (server_msg);
 }
 
 static void
@@ -738,28 +788,46 @@ test_protocol_server_any_direct (Test *test,
 				 gconstpointer unused)
 {
 	SoupMessage *msg;
+	SoupServerMessage *server_msg;
+	SoupMessageHeaders *request_headers;
+	SoupMessageHeaders *response_headers;
+	SoupMessageHeadersIter iter;
+	const char *name, *value;
 	gboolean ok;
 	const char *protocol;
 	GError *error = NULL;
 
 	msg = soup_message_new ("GET", "http://127.0.0.1");
-	soup_websocket_client_prepare_handshake (msg, NULL, (char **) all_protocols);
+	soup_websocket_client_prepare_handshake (msg, NULL, (char **) all_protocols, NULL);
 
-	ok = soup_websocket_server_check_handshake (msg, NULL, NULL, &error);
+	server_msg = g_object_new (SOUP_TYPE_SERVER_MESSAGE, NULL);
+	soup_server_message_set_method (server_msg, soup_message_get_method (msg));
+	soup_server_message_set_uri (server_msg, soup_message_get_uri (msg));
+	request_headers = soup_server_message_get_request_headers (server_msg);
+	soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (request_headers, name, value);
+	ok = soup_websocket_server_check_handshake (server_msg, NULL, NULL, NULL, &error);
 	g_assert_no_error (error);
 	g_assert_true (ok);
 
-	ok = soup_websocket_server_process_handshake (msg, NULL, NULL);
+	ok = soup_websocket_server_process_handshake (server_msg, NULL, NULL, NULL, NULL);
 	g_assert_true (ok);
 
-	protocol = soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Protocol");
+        soup_message_set_status (msg, soup_server_message_get_status (server_msg), NULL);
+	response_headers = soup_server_message_get_response_headers (server_msg);
+	soup_message_headers_iter_init (&iter, response_headers);
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (soup_message_get_response_headers (msg), name, value);
+	protocol = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Sec-WebSocket-Protocol");
 	g_assert_cmpstr (protocol, ==, NULL);
 
-	ok = soup_websocket_client_verify_handshake (msg, &error);
+	ok = soup_websocket_client_verify_handshake (msg, NULL, NULL, &error);
 	g_assert_no_error (error);
 	g_assert_true (ok);
 
 	g_object_unref (msg);
+	g_object_unref (server_msg);
 }
 
 static void
@@ -774,7 +842,7 @@ test_protocol_server_any_soup (Test *test,
 
 	g_assert_cmpstr (soup_websocket_connection_get_protocol (test->client), ==, NULL);
 	g_assert_cmpstr (soup_websocket_connection_get_protocol (test->server), ==, NULL);
-	g_assert_cmpstr (soup_message_headers_get_one (test->msg->response_headers, "Sec-WebSocket-Protocol"), ==, NULL);
+	g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (test->msg), "Sec-WebSocket-Protocol"), ==, NULL);
 }
 
 static void
@@ -782,28 +850,46 @@ test_protocol_client_any_direct (Test *test,
 				 gconstpointer unused)
 {
 	SoupMessage *msg;
+	SoupServerMessage *server_msg;
+	SoupMessageHeaders *request_headers;
+	SoupMessageHeaders *response_headers;
+	SoupMessageHeadersIter iter;
+	const char *name, *value;
 	gboolean ok;
 	const char *protocol;
 	GError *error = NULL;
 
 	msg = soup_message_new ("GET", "http://127.0.0.1");
-	soup_websocket_client_prepare_handshake (msg, NULL, NULL);
+	soup_websocket_client_prepare_handshake (msg, NULL, NULL, NULL);
 
-	ok = soup_websocket_server_check_handshake (msg, NULL, (char **) all_protocols, &error);
+	server_msg = g_object_new (SOUP_TYPE_SERVER_MESSAGE, NULL);
+	soup_server_message_set_method (server_msg, soup_message_get_method (msg));
+	soup_server_message_set_uri (server_msg, soup_message_get_uri (msg));
+	request_headers = soup_server_message_get_request_headers (server_msg);
+	soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (request_headers, name, value);
+	ok = soup_websocket_server_check_handshake (server_msg, NULL, (char **) all_protocols, NULL, &error);
 	g_assert_no_error (error);
 	g_assert_true (ok);
 
-	ok = soup_websocket_server_process_handshake (msg, NULL, (char **) all_protocols);
+	ok = soup_websocket_server_process_handshake (server_msg, NULL, (char **) all_protocols, NULL, NULL);
 	g_assert_true (ok);
 
-	protocol = soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Protocol");
+	soup_message_set_status (msg, soup_server_message_get_status (server_msg), NULL);
+	response_headers = soup_server_message_get_response_headers (server_msg);
+	soup_message_headers_iter_init (&iter, response_headers);
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (soup_message_get_response_headers (msg), name, value);
+	protocol = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Sec-WebSocket-Protocol");
 	g_assert_cmpstr (protocol, ==, NULL);
 
-	ok = soup_websocket_client_verify_handshake (msg, &error);
+	ok = soup_websocket_client_verify_handshake (msg, NULL, NULL, &error);
 	g_assert_no_error (error);
 	g_assert_true (ok);
 
 	g_object_unref (msg);
+	g_object_unref (server_msg);
 }
 
 static void
@@ -818,8 +904,13 @@ test_protocol_client_any_soup (Test *test,
 
 	g_assert_cmpstr (soup_websocket_connection_get_protocol (test->client), ==, NULL);
 	g_assert_cmpstr (soup_websocket_connection_get_protocol (test->server), ==, NULL);
-	g_assert_cmpstr (soup_message_headers_get_one (test->msg->response_headers, "Sec-WebSocket-Protocol"), ==, NULL);
+	g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (test->msg), "Sec-WebSocket-Protocol"), ==, NULL);
 }
+
+typedef enum {
+        CLOSE_TEST_FLAG_SERVER = 1 << 0,
+        CLOSE_TEST_FLAG_CLIENT = 1 << 1
+} CloseTestFlags;
 
 static const struct {
 	gushort code;
@@ -828,11 +919,16 @@ static const struct {
 	const char *expected_sender_reason;
 	gushort expected_receiver_code;
 	const char *expected_receiver_reason;
+        CloseTestFlags flags;
 } close_clean_tests[] = {
-	{ SOUP_WEBSOCKET_CLOSE_NORMAL, "NORMAL", SOUP_WEBSOCKET_CLOSE_NORMAL, "NORMAL", SOUP_WEBSOCKET_CLOSE_NORMAL, "NORMAL" },
-	{ SOUP_WEBSOCKET_CLOSE_GOING_AWAY, "GOING_AWAY", SOUP_WEBSOCKET_CLOSE_GOING_AWAY, "GOING_AWAY", SOUP_WEBSOCKET_CLOSE_GOING_AWAY, "GOING_AWAY" },
-	{ SOUP_WEBSOCKET_CLOSE_NORMAL, NULL, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL },
-	{ SOUP_WEBSOCKET_CLOSE_NO_STATUS, NULL, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL, SOUP_WEBSOCKET_CLOSE_NO_STATUS, NULL },
+	{ SOUP_WEBSOCKET_CLOSE_NORMAL, "NORMAL", SOUP_WEBSOCKET_CLOSE_NORMAL, "NORMAL", SOUP_WEBSOCKET_CLOSE_NORMAL, "NORMAL", CLOSE_TEST_FLAG_SERVER | CLOSE_TEST_FLAG_CLIENT },
+	{ SOUP_WEBSOCKET_CLOSE_GOING_AWAY, "GOING_AWAY", SOUP_WEBSOCKET_CLOSE_GOING_AWAY, "GOING_AWAY", SOUP_WEBSOCKET_CLOSE_GOING_AWAY, "GOING_AWAY", CLOSE_TEST_FLAG_SERVER | CLOSE_TEST_FLAG_CLIENT },
+	{ SOUP_WEBSOCKET_CLOSE_NORMAL, NULL, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL, CLOSE_TEST_FLAG_SERVER | CLOSE_TEST_FLAG_CLIENT },
+	{ SOUP_WEBSOCKET_CLOSE_NO_STATUS, NULL, SOUP_WEBSOCKET_CLOSE_NORMAL, NULL, SOUP_WEBSOCKET_CLOSE_NO_STATUS, NULL, CLOSE_TEST_FLAG_SERVER | CLOSE_TEST_FLAG_CLIENT },
+        { 2999, NULL, SOUP_WEBSOCKET_CLOSE_PROTOCOL_ERROR, NULL, SOUP_WEBSOCKET_CLOSE_PROTOCOL_ERROR, NULL, CLOSE_TEST_FLAG_CLIENT },
+        { 2999, NULL, 0, NULL, SOUP_WEBSOCKET_CLOSE_PROTOCOL_ERROR, NULL, CLOSE_TEST_FLAG_SERVER },
+        { 5000, NULL, SOUP_WEBSOCKET_CLOSE_PROTOCOL_ERROR, NULL, SOUP_WEBSOCKET_CLOSE_PROTOCOL_ERROR, NULL, CLOSE_TEST_FLAG_CLIENT },
+        { 5000, NULL, 0, NULL, SOUP_WEBSOCKET_CLOSE_PROTOCOL_ERROR, NULL, CLOSE_TEST_FLAG_SERVER },
 };
 
 static void
@@ -872,6 +968,9 @@ test_close_clean_client_soup (Test *test,
 	guint i;
 
 	for (i = 0; i < G_N_ELEMENTS (close_clean_tests); i++) {
+                if (!(close_clean_tests[i].flags & CLOSE_TEST_FLAG_CLIENT))
+                        continue;
+
 		setup_soup_connection (test, data);
 
 		do_close_clean_client (test,
@@ -893,6 +992,9 @@ test_close_clean_client_direct (Test *test,
 	guint i;
 
 	for (i = 0; i < G_N_ELEMENTS (close_clean_tests); i++) {
+                if (!(close_clean_tests[i].flags & CLOSE_TEST_FLAG_CLIENT))
+                        continue;
+
 		setup_direct_connection (test, data);
 
 		do_close_clean_client (test,
@@ -944,6 +1046,9 @@ test_close_clean_server_soup (Test *test,
 	guint i;
 
 	for (i = 0; i < G_N_ELEMENTS (close_clean_tests); i++) {
+                if (!(close_clean_tests[i].flags & CLOSE_TEST_FLAG_SERVER))
+                        continue;
+
 		setup_direct_connection (test, data);
 
 		do_close_clean_server (test,
@@ -965,6 +1070,9 @@ test_close_clean_server_direct (Test *test,
 	guint i;
 
 	for (i = 0; i < G_N_ELEMENTS (close_clean_tests); i++) {
+                if (!(close_clean_tests[i].flags & CLOSE_TEST_FLAG_SERVER))
+                        continue;
+
 		setup_direct_connection (test, data);
 
 		do_close_clean_server (test,
@@ -1274,7 +1382,7 @@ send_invalid_encode_length_server_thread (gpointer user_data)
 	gsize written;
 	GError *error = NULL;
 
-	header_size = test->payload->len == 125 ? 6 : 10;
+	header_size = test->payload->len == 125 ? 5 : 10;
 	g_output_stream_write_all (g_io_stream_get_output_stream (test->test->raw_server),
 				   test->header, header_size, &written, NULL, &error);
 	g_assert_no_error (error);
@@ -1431,9 +1539,9 @@ test_server_receive_unmasked_frame (Test *test,
 
 static void
 test_client_context_got_server_connection (SoupServer              *server,
-					   SoupWebsocketConnection *connection,
+					   SoupServerMessage       *msg,
 					   const char              *path,
-					   SoupClientContext       *client,
+					   SoupWebsocketConnection *connection,
 					   gpointer                 user_data)
 {
 	Test *test = user_data;
@@ -1442,7 +1550,7 @@ test_client_context_got_server_connection (SoupServer              *server,
 	char *str;
 	const char *remote_ip;
 
-	addr = soup_client_context_get_local_address (client);
+	addr = soup_server_message_get_local_address (msg);
 	iaddr = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (addr));
 	str = g_inet_address_to_string (iaddr);
 	if (g_inet_address_get_family (iaddr) == G_SOCKET_FAMILY_IPV4)
@@ -1451,7 +1559,7 @@ test_client_context_got_server_connection (SoupServer              *server,
 		g_assert_cmpstr (str, ==, "::1");
 	g_free (str);
 
-	addr = soup_client_context_get_remote_address (client);
+	addr = soup_server_message_get_remote_address (msg);
 	iaddr = g_inet_socket_address_get_address (G_INET_SOCKET_ADDRESS (addr));
 	str = g_inet_address_to_string (iaddr);
 	if (g_inet_address_get_family (iaddr) == G_SOCKET_FAMILY_IPV4)
@@ -1459,9 +1567,11 @@ test_client_context_got_server_connection (SoupServer              *server,
 	else
 		g_assert_cmpstr (str, ==, "::1");
 
-	remote_ip = soup_client_context_get_host (client);
+	remote_ip = soup_server_message_get_remote_host (msg);
 	g_assert_cmpstr (remote_ip, ==, str);
 	g_free (str);
+
+        g_assert_nonnull (soup_server_message_get_socket (msg));
 
 	test->server = g_object_ref (connection);
 }
@@ -1610,18 +1720,31 @@ test_deflate_negotiate_direct (Test *test,
 
 	for (i = 0; i < G_N_ELEMENTS (deflate_negotiate_tests); i++) {
 		SoupMessage *msg;
+		SoupServerMessage *server_msg;
+		SoupMessageHeaders *request_headers;
+		SoupMessageHeaders *response_headers;
+		SoupMessageHeadersIter iter;
+		const char *name, *value;
 		gboolean result;
 		GList *accepted_extensions = NULL;
 		GError *error = NULL;
 
 		msg = soup_message_new ("GET", "http://127.0.0.1");
 
-		soup_websocket_client_prepare_handshake (msg, NULL, NULL);
-		soup_message_headers_append (msg->request_headers, "Sec-WebSocket-Extensions", deflate_negotiate_tests[i].client_extension);
-		result = soup_websocket_server_check_handshake_with_extensions (msg, NULL, NULL,
-										deflate_negotiate_tests[i].server_supports_extensions ?
-										supported_extensions : NULL,
-										&error);
+		soup_websocket_client_prepare_handshake (msg, NULL, NULL, NULL);
+		soup_message_headers_append (soup_message_get_request_headers (msg), "Sec-WebSocket-Extensions", deflate_negotiate_tests[i].client_extension);
+
+		server_msg = g_object_new (SOUP_TYPE_SERVER_MESSAGE, NULL);
+		soup_server_message_set_method (server_msg, soup_message_get_method (msg));
+		soup_server_message_set_uri (server_msg, soup_message_get_uri (msg));
+		request_headers = soup_server_message_get_request_headers (server_msg);
+		soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
+		while (soup_message_headers_iter_next (&iter, &name, &value))
+			soup_message_headers_append (request_headers, name, value);
+		result = soup_websocket_server_check_handshake (server_msg, NULL, NULL,
+								deflate_negotiate_tests[i].server_supports_extensions ?
+								supported_extensions : NULL,
+								&error);
 		g_assert (result == deflate_negotiate_tests[i].expected_check_result);
 		if (result) {
 			g_assert_no_error (error);
@@ -1630,15 +1753,21 @@ test_deflate_negotiate_direct (Test *test,
 			g_clear_error (&error);
 		}
 
-		result = soup_websocket_server_process_handshake_with_extensions (msg, NULL, NULL,
-										  deflate_negotiate_tests[i].server_supports_extensions ?
-										  supported_extensions : NULL,
-										  &accepted_extensions);
+		result = soup_websocket_server_process_handshake (server_msg, NULL, NULL,
+								  deflate_negotiate_tests[i].server_supports_extensions ?
+								  supported_extensions : NULL,
+								  &accepted_extensions);
 		g_assert (result == deflate_negotiate_tests[i].expected_check_result);
+
+		soup_message_set_status (msg, soup_server_message_get_status (server_msg), NULL);
+		response_headers = soup_server_message_get_response_headers (server_msg);
+		soup_message_headers_iter_init (&iter, response_headers);
+                while (soup_message_headers_iter_next (&iter, &name, &value))
+                        soup_message_headers_append (soup_message_get_response_headers (msg), name, value);
 		if (deflate_negotiate_tests[i].expected_accepted_extension) {
 			const char *extension;
 
-			extension = soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Extensions");
+			extension = soup_message_headers_get_one (soup_message_get_response_headers (msg), "Sec-WebSocket-Extensions");
 			g_assert_cmpstr (extension, ==, deflate_negotiate_tests[i].server_extension);
 			g_assert_nonnull (accepted_extensions);
 			g_assert_cmpuint (g_list_length (accepted_extensions), ==, 1);
@@ -1649,7 +1778,7 @@ test_deflate_negotiate_direct (Test *test,
 			g_assert_null (accepted_extensions);
 		}
 
-		result = soup_websocket_client_verify_handshake_with_extensions (msg, supported_extensions, &accepted_extensions, &error);
+		result = soup_websocket_client_verify_handshake (msg, supported_extensions, &accepted_extensions, &error);
 		g_assert (result == deflate_negotiate_tests[i].expected_verify_result);
 		if (result) {
                         g_assert_no_error (error);
@@ -1668,6 +1797,7 @@ test_deflate_negotiate_direct (Test *test,
                 }
 
 		g_object_unref (msg);
+		g_object_unref (server_msg);
         }
 
 	g_ptr_array_unref (supported_extensions);
@@ -1678,6 +1808,11 @@ test_deflate_disabled_in_message_direct (Test *test,
 					 gconstpointer unused)
 {
 	SoupMessage *msg;
+	SoupServerMessage *server_msg;
+	SoupMessageHeaders *request_headers;
+	SoupMessageHeaders *response_headers;
+	SoupMessageHeadersIter iter;
+	const char *name, *value;
 	GPtrArray *supported_extensions;
 	GList *accepted_extensions = NULL;
 	GError *error = NULL;
@@ -1687,21 +1822,35 @@ test_deflate_disabled_in_message_direct (Test *test,
 
 	msg = soup_message_new ("GET", "http://127.0.0.1");
 	soup_message_disable_feature (msg, SOUP_TYPE_WEBSOCKET_EXTENSION_DEFLATE);
-	soup_websocket_client_prepare_handshake_with_extensions (msg, NULL, NULL, supported_extensions);
-	g_assert_cmpstr (soup_message_headers_get_one (msg->request_headers, "Sec-WebSocket-Extensions"), ==, NULL);
+	soup_websocket_client_prepare_handshake (msg, NULL, NULL, supported_extensions);
+	g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_request_headers (msg), "Sec-WebSocket-Extensions"), ==, NULL);
 
-	g_assert_true (soup_websocket_server_check_handshake_with_extensions (msg, NULL, NULL, supported_extensions, &error));
+	server_msg = g_object_new (SOUP_TYPE_SERVER_MESSAGE, NULL);
+	soup_server_message_set_method (server_msg, soup_message_get_method (msg));
+	soup_server_message_set_uri (server_msg, soup_message_get_uri (msg));
+	request_headers = soup_server_message_get_request_headers (server_msg);
+	soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (request_headers, name, value);
+
+	g_assert_true (soup_websocket_server_check_handshake (server_msg, NULL, NULL, supported_extensions, &error));
 	g_assert_no_error (error);
 
-	g_assert_true (soup_websocket_server_process_handshake_with_extensions (msg, NULL, NULL, supported_extensions, &accepted_extensions));
+	g_assert_true (soup_websocket_server_process_handshake (server_msg, NULL, NULL, supported_extensions, &accepted_extensions));
 	g_assert_null (accepted_extensions);
-	g_assert_cmpstr (soup_message_headers_get_one (msg->response_headers, "Sec-WebSocket-Extensions"), ==, NULL);
+	soup_message_set_status (msg, soup_server_message_get_status (server_msg), NULL);
+	response_headers = soup_server_message_get_response_headers (server_msg);
+	soup_message_headers_iter_init (&iter, response_headers);
+	while (soup_message_headers_iter_next (&iter, &name, &value))
+		soup_message_headers_append (soup_message_get_response_headers (msg), name, value);
+	g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (msg), "Sec-WebSocket-Extensions"), ==, NULL);
 
-	g_assert_true (soup_websocket_client_verify_handshake_with_extensions (msg, supported_extensions, &accepted_extensions, &error));
+	g_assert_true (soup_websocket_client_verify_handshake (msg, supported_extensions, &accepted_extensions, &error));
 	g_assert_no_error (error);
 	g_assert_null (accepted_extensions);
 
 	g_object_unref (msg);
+	g_object_unref (server_msg);
 	g_ptr_array_unref (supported_extensions);
 }
 
@@ -1717,8 +1866,8 @@ test_deflate_disabled_in_message_soup (Test *test,
 	WAIT_UNTIL (test->client != NULL || test->client_error != NULL);
 	g_assert_no_error (test->client_error);
 
-	g_assert_cmpstr (soup_message_headers_get_one (test->msg->request_headers, "Sec-WebSocket-Extensions"), ==, NULL);
-	g_assert_cmpstr (soup_message_headers_get_one (test->msg->response_headers, "Sec-WebSocket-Extensions"), ==, NULL);
+	g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_request_headers (test->msg), "Sec-WebSocket-Extensions"), ==, NULL);
+	g_assert_cmpstr (soup_message_headers_get_one (soup_message_get_response_headers (test->msg), "Sec-WebSocket-Extensions"), ==, NULL);
 }
 
 static gpointer
@@ -1820,7 +1969,7 @@ test_cookies_in_request (Test *test,
         WAIT_UNTIL (test->client != NULL || test->client_error != NULL);
         g_assert_no_error (test->client_error);
 
-        cookie_header = soup_message_headers_get_one (test->msg->request_headers, "Cookie");
+        cookie_header = soup_message_headers_get_one (soup_message_get_request_headers (test->msg), "Cookie");
         requested_cookie = soup_cookie_parse (cookie_header, NULL);
         g_assert_true (soup_cookie_equal (cookie, requested_cookie));
         soup_cookie_free (cookie);
@@ -1828,10 +1977,12 @@ test_cookies_in_request (Test *test,
 }
 
 static void
-cookies_test_websocket_server_request_started (SoupServer *server, SoupMessage *msg,
-                                               SoupClientContext *client, gpointer user_data)
+cookies_test_websocket_server_request_started (SoupServer        *server,
+					       SoupServerMessage *msg,
+                                               gpointer           user_data)
 {
-        soup_message_headers_append (msg->response_headers, "Set-Cookie", "foo=bar; Path=/");
+        soup_message_headers_append (soup_server_message_get_response_headers (msg),
+				     "Set-Cookie", "foo=bar; Path=/");
 }
 
 static void
@@ -1859,6 +2010,36 @@ test_cookies_in_response (Test *test,
         g_assert_true (soup_cookie_equal (cookie, (SoupCookie *)cookies->data));
         g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
         soup_cookie_free (cookie);
+}
+
+static void
+test_connection_error_cb (GObject      *object,
+			  GAsyncResult *result,
+			  gpointer      user_data)
+{
+	GError **error = user_data;
+
+	g_assert_null (soup_session_websocket_connect_finish (SOUP_SESSION (object), result, error));
+}
+
+static void
+test_connection_error (void)
+{
+	SoupSession *session;
+	SoupMessage *msg;
+	GError *error = NULL;
+
+	session = soup_test_session_new (NULL);
+
+	msg = soup_message_new ("GET", "ws://127.0.0.1:1234/unix");
+	soup_session_websocket_connect_async (session, msg, NULL, NULL, G_PRIORITY_DEFAULT,
+					      NULL, test_connection_error_cb, &error);
+	WAIT_UNTIL (error != NULL);
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CONNECTION_REFUSED);
+
+	g_error_free (error);
+	g_object_unref (msg);
+	soup_test_session_abort_unref (session);
 }
 
 int
@@ -2093,6 +2274,8 @@ main (int argc,
         g_test_add ("/websocket/soup/cookies-in-response", Test, NULL, NULL,
                     test_cookies_in_response,
                     teardown_soup_connection);
+
+	g_test_add_func ("/websocket/soup/connection-error", test_connection_error);
 
 	ret = g_test_run ();
 

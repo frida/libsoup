@@ -1,24 +1,29 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2012 Igalia S.L.
  */
 
-#ifndef __SOUP_TLD_H__
-#define __SOUP_TLD_H__
+#pragma once
 
-#include <libsoup/soup-types.h>
+#include "soup-types.h"
 
 G_BEGIN_DECLS
 
-SOUP_AVAILABLE_IN_2_40
+SOUP_AVAILABLE_IN_ALL
 const char *soup_tld_get_base_domain         (const char *hostname,
 					      GError    **error);
 
-SOUP_AVAILABLE_IN_2_40
+SOUP_AVAILABLE_IN_ALL
 gboolean    soup_tld_domain_is_public_suffix (const char *domain);
 
-/* Errors */
-SOUP_AVAILABLE_IN_2_40
+
+/**
+ * soup_tld_error_quark:
+ * Registers error quark for soup_tld_get_base_domain() if needed.
+ *
+ * Returns: Error quark for Soup TLD functions.
+ */
+SOUP_AVAILABLE_IN_ALL
 GQuark soup_tld_error_quark (void);
 #define SOUP_TLD_ERROR soup_tld_error_quark()
 
@@ -31,5 +36,3 @@ typedef enum {
 } SoupTLDError;
 
 G_END_DECLS
-
-#endif /* __SOUP_TLD_H__ */

@@ -8,8 +8,8 @@ msgid ""
 msgstr ""
 "Project-Id-Version: libsoup master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/libsoup/issues\n"
-"POT-Creation-Date: 2020-06-26 17:08+0000\n"
-"PO-Revision-Date: 2020-06-27 13:22+0300\n"
+"POT-Creation-Date: 2021-06-25 19:04+0000\n"
+"PO-Revision-Date: 2021-07-05 22:25+0300\n"
 "Last-Translator: Florentina Mușat <florentina.musat.28@gmail.com>\n"
 "Language-Team: Romanian <gnomero-list@lists.sourceforge.net>\n"
 "Language: ro\n"
@@ -18,142 +18,149 @@ msgstr ""
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=3; plural=(n==1 ? 0 : (n==0 || (n%100 > 0 && n%100 < "
 "20)) ? 1 : 2);;\n"
-"X-Generator: Poedit 2.3.1\n"
+"X-Generator: Poedit 3.0\n"
 "X-Project-Style: gnome\n"
 
-#: libsoup/soup-body-input-stream.c:139 libsoup/soup-body-input-stream.c:170
-#: libsoup/soup-body-input-stream.c:203 libsoup/soup-message-io.c:236
-msgid "Connection terminated unexpectedly"
-msgstr "Conexiunea s-a terminat neașteptat"
-
-#: libsoup/soup-body-input-stream.c:459
-msgid "Invalid seek request"
-msgstr "Cerere de căutare nevalidă"
-
-#: libsoup/soup-body-input-stream.c:487
-msgid "Cannot truncate SoupBodyInputStream"
-msgstr "Nu se poate trunchia SoupBodyInputStream"
-
-#: libsoup/soup-cache-input-stream.c:76
+#: libsoup/cache/soup-cache-input-stream.c:70
 msgid "Network stream unexpectedly closed"
 msgstr "Fluxul de rețea s-a închis neașteptat"
 
-#: libsoup/soup-cache-input-stream.c:291
+#: libsoup/cache/soup-cache-input-stream.c:252
 msgid "Failed to completely cache the resource"
 msgstr "Nu s-a putut adăuga complet la cache resursa"
 
-#: libsoup/soup-directory-input-stream.c:231
-msgid "Name"
-msgstr "Nume"
-
-#: libsoup/soup-directory-input-stream.c:232
-msgid "Size"
-msgstr "Dimensiune"
-
-#: libsoup/soup-directory-input-stream.c:233
-msgid "Date Modified"
-msgstr "Dată modificat"
-
-#: libsoup/soup-converter-wrapper.c:189
+#: libsoup/content-decoder/soup-converter-wrapper.c:197
 #, c-format
 msgid "Output buffer is too small"
 msgstr "Preîncărcarea de rezultat este prea mică"
 
-#: libsoup/soup-message-client-io.c:39
-msgid "Could not parse HTTP response"
-msgstr "Nu s-a putut parsa răspunsul HTTP"
+#: libsoup/http1/soup-body-input-stream.c:155
+#: libsoup/http1/soup-body-input-stream.c:187
+#: libsoup/http1/soup-body-input-stream.c:220
+#: libsoup/http1/soup-message-io-data.c:77
+msgid "Connection terminated unexpectedly"
+msgstr "Conexiunea s-a terminat neașteptat"
 
-#: libsoup/soup-message-client-io.c:62
-msgid "Unrecognized HTTP response encoding"
-msgstr "Codare de răspuns HTTP nerecunoscută"
+#: libsoup/http1/soup-body-input-stream.c:471
+msgid "Invalid seek request"
+msgstr "Cerere de căutare nevalidă"
 
-#: libsoup/soup-message-io.c:261
-msgid "Header too big"
-msgstr "Antetul este prea mare"
+#: libsoup/http1/soup-body-input-stream.c:499
+msgid "Cannot truncate SoupBodyInputStream"
+msgstr "Nu se poate trunchia SoupBodyInputStream"
 
-#: libsoup/soup-message-io.c:393 libsoup/soup-message-io.c:1016
+#: libsoup/http1/soup-client-message-io-http1.c:312
+#: libsoup/http1/soup-client-message-io-http1.c:756
+#: libsoup/http2/soup-body-input-stream-http2.c:221
+#: libsoup/server/soup-server-io.c:354 libsoup/server/soup-server-io.c:819
 msgid "Operation would block"
 msgstr "Operația ar bloca"
 
-#: libsoup/soup-message-io.c:968 libsoup/soup-message-io.c:1001
+#: libsoup/http1/soup-client-message-io-http1.c:456
+msgid "Could not parse HTTP response"
+msgstr "Nu s-a putut parsa răspunsul HTTP"
+
+#: libsoup/http1/soup-client-message-io-http1.c:479
+msgid "Unrecognized HTTP response encoding"
+msgstr "Codare de răspuns HTTP nerecunoscută"
+
+#: libsoup/http1/soup-client-message-io-http1.c:715
+#: libsoup/http1/soup-client-message-io-http1.c:741
+#: libsoup/http2/soup-client-message-io-http2.c:1455
+#: libsoup/http2/soup-client-message-io-http2.c:1479
 msgid "Operation was cancelled"
 msgstr "Operația a fost anulată"
 
-#: libsoup/soup-message-server-io.c:63
-msgid "Could not parse HTTP request"
-msgstr "Nu s-a putut parsa cererea HTTP"
+#: libsoup/http1/soup-message-io-data.c:105
+msgid "Header too big"
+msgstr "Antetul este prea mare"
 
-#: libsoup/soup-request.c:141
-#, c-format
-msgid "No URI provided"
-msgstr "Nu s-a furnizat un URI"
-
-#: libsoup/soup-request.c:151
-#, c-format
-msgid "Invalid “%s” URI: %s"
-msgstr "URI nevalid „%s”: %s"
-
-#: libsoup/soup-server.c:1810
+#: libsoup/server/soup-server.c:1201
 msgid "Can’t create a TLS server without a TLS certificate"
 msgstr "Nu se poate crea un server TLS fără un certificat TLS"
 
-#: libsoup/soup-server.c:1827
+#: libsoup/server/soup-server.c:1223
 #, c-format
 msgid "Could not listen on address %s, port %d: "
 msgstr "Nu s-a putut asculta la adresa %s, portul %d: "
 
-#: libsoup/soup-session.c:4570
-#, c-format
-msgid "Could not parse URI “%s”"
-msgstr "Nu s-a putut parsa URI „%s”"
-
-#: libsoup/soup-session.c:4607
-#, c-format
-msgid "Unsupported URI scheme “%s”"
-msgstr "Schemă de URI nesuportată „%s”"
-
-#: libsoup/soup-session.c:4629
-#, c-format
-msgid "Not an HTTP URI"
-msgstr "Nu este un URI HTTP"
-
-#: libsoup/soup-session.c:4840
-msgid "The server did not accept the WebSocket handshake."
-msgstr "Serverul nu a acceptat conectarea WebSocket."
-
-#: libsoup/soup-socket.c:148
-msgid "Can’t import non-socket as SoupSocket"
-msgstr "Nu se poate importa non-soclul ca SoupSocket"
-
-#: libsoup/soup-socket.c:166
+#: libsoup/server/soup-socket.c:121
 msgid "Could not import existing socket: "
 msgstr "Nu s-a putut importa soclul existent: "
 
-#: libsoup/soup-socket.c:175
+#: libsoup/server/soup-socket.c:130
 msgid "Can’t import unconnected socket"
 msgstr "Nu se poate importa soclul neconectat"
 
-#: libsoup/soup-websocket.c:479 libsoup/soup-websocket.c:523
-#: libsoup/soup-websocket.c:539
+#: libsoup/soup-session.c:1166
+msgid "Location header is missing or empty in response headers"
+msgstr "Antetul de locație lipsește sau este gol în anteturile răspuns"
+
+#: libsoup/soup-session.c:1180
+#, c-format
+msgid "Invalid URI “%s” in Location response header"
+msgstr "URI nevalid „%s” în antetul răspuns de locație"
+
+#: libsoup/soup-session.c:1200
+msgid "Too many redirects"
+msgstr "Prea multe redirectări"
+
+#: libsoup/soup-session.c:1205
+msgid "Message was restarted too many times"
+msgstr "Mesajul a fost repornit de prea multe ori"
+
+#: libsoup/soup-session.c:3317 libsoup/soup-session.c:3466
+msgid "Message is already in session queue"
+msgstr "Mesajul este deja în coada de sesiune"
+
+#: libsoup/soup-session.c:3827
+msgid "The server did not accept the WebSocket handshake."
+msgstr "Serverul nu a acceptat conectarea WebSocket."
+
+#: libsoup/soup-tld.c:142
+msgid "No public-suffix list available."
+msgstr "Nu este disponibilă nicio listă cu sufix public."
+
+#: libsoup/soup-tld.c:152 libsoup/soup-tld.c:168
+msgid "Invalid hostname"
+msgstr "Nume de gazdă nevalid"
+
+#: libsoup/soup-tld.c:159
+msgid "Hostname is an IP address"
+msgstr "Numele de gazdă este o adresă IP"
+
+#: libsoup/soup-tld.c:180
+msgid "Hostname has no base domain"
+msgstr "Numele de gazdă nu are un domeniu de bază"
+
+#: libsoup/soup-tld.c:188
+msgid "Not enough domains"
+msgstr "Nu sunt destule domenii"
+
+#: libsoup/websocket/soup-websocket.c:399
+#: libsoup/websocket/soup-websocket.c:443
+#: libsoup/websocket/soup-websocket.c:459
 msgid "Server requested unsupported extension"
 msgstr "Serverul a cerut o extensie nesuportată"
 
-#: libsoup/soup-websocket.c:502 libsoup/soup-websocket.c:694
+#: libsoup/websocket/soup-websocket.c:422
+#: libsoup/websocket/soup-websocket.c:614
 #, c-format
 msgid "Incorrect WebSocket “%s” header"
 msgstr "Antet „%s” de WebSocket incorect"
 
-#: libsoup/soup-websocket.c:503 libsoup/soup-websocket.c:1024
+#: libsoup/websocket/soup-websocket.c:423
+#: libsoup/websocket/soup-websocket.c:878
 #, c-format
 msgid "Server returned incorrect “%s” key"
 msgstr "Serverul a întors cheia „%s” incorectă"
 
-#: libsoup/soup-websocket.c:566
+#: libsoup/websocket/soup-websocket.c:486
 #, c-format
 msgid "Duplicated parameter in “%s” WebSocket extension header"
 msgstr "Parametru duplicat în antetul de extensie WebSocket „%s”"
 
-#: libsoup/soup-websocket.c:567
+#: libsoup/websocket/soup-websocket.c:487
 #, c-format
 msgid ""
 "Server returned a duplicated parameter in “%s” WebSocket extension header"
@@ -161,50 +168,62 @@ msgstr ""
 "Serverul a returnat un parametru duplicat în antetul de extensie WebSocket "
 "„%s”"
 
-#: libsoup/soup-websocket.c:658 libsoup/soup-websocket.c:667
+#: libsoup/websocket/soup-websocket.c:577
+#: libsoup/websocket/soup-websocket.c:587
 msgid "WebSocket handshake expected"
 msgstr "S-a așteptat o conectare WebSocket"
 
-#: libsoup/soup-websocket.c:675
+#: libsoup/websocket/soup-websocket.c:595
 msgid "Unsupported WebSocket version"
 msgstr "Versiune de WebSocket nesuportată"
 
-#: libsoup/soup-websocket.c:684
+#: libsoup/websocket/soup-websocket.c:604
 msgid "Invalid WebSocket key"
 msgstr "Cheie de WebSocket nevalidă"
 
-#: libsoup/soup-websocket.c:703
+#: libsoup/websocket/soup-websocket.c:623
 msgid "Unsupported WebSocket subprotocol"
 msgstr "Subprotocol de WebSocket nesuportat"
 
-#: libsoup/soup-websocket.c:975
+#: libsoup/websocket/soup-websocket.c:829
 msgid "Server rejected WebSocket handshake"
 msgstr "Serverul a respins conectarea WebSocket"
 
-#: libsoup/soup-websocket.c:983 libsoup/soup-websocket.c:992
+#: libsoup/websocket/soup-websocket.c:837
+#: libsoup/websocket/soup-websocket.c:846
 msgid "Server ignored WebSocket handshake"
 msgstr "Serverul a ignorat conectarea WebSocket"
 
-#: libsoup/soup-websocket.c:1004
+#: libsoup/websocket/soup-websocket.c:858
 msgid "Server requested unsupported protocol"
 msgstr "Serverul a cerut un protocol nesuportat"
 
-#: libsoup/soup-tld.c:150
-msgid "No public-suffix list available."
-msgstr "Nu este disponibilă nicio listă cu sufix public."
+#~ msgid "Could not parse URI “%s”: %s"
+#~ msgstr "Nu s-a putut parsa URI-ul „%s”: %s"
 
-#: libsoup/soup-tld.c:160 libsoup/soup-tld.c:176
-msgid "Invalid hostname"
-msgstr "Nume de gazdă nevalid"
+#~ msgid "Unsupported URI scheme “%s”"
+#~ msgstr "Schemă de URI nesuportată „%s”"
 
-#: libsoup/soup-tld.c:167
-msgid "Hostname is an IP address"
-msgstr "Numele de gazdă este o adresă IP"
+#~ msgid "Invalid “%s” URI: %s"
+#~ msgstr "URI nevalid „%s”: %s"
 
-#: libsoup/soup-tld.c:188
-msgid "Hostname has no base domain"
-msgstr "Numele de gazdă nu are un domeniu de bază"
+#~ msgid "Name"
+#~ msgstr "Nume"
 
-#: libsoup/soup-tld.c:196
-msgid "Not enough domains"
-msgstr "Nu sunt destule domenii"
+#~ msgid "Size"
+#~ msgstr "Dimensiune"
+
+#~ msgid "Date Modified"
+#~ msgstr "Dată modificat"
+
+#~ msgid "Could not parse HTTP request"
+#~ msgstr "Nu s-a putut parsa cererea HTTP"
+
+#~ msgid "No URI provided"
+#~ msgstr "Nu s-a furnizat un URI"
+
+#~ msgid "Not an HTTP URI"
+#~ msgstr "Nu este un URI HTTP"
+
+#~ msgid "Can’t import non-socket as SoupSocket"
+#~ msgstr "Nu se poate importa non-soclul ca SoupSocket"

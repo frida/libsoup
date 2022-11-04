@@ -1,21 +1,17 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2008 Red Hat, Inc.
  */
 
-#ifndef __SOUP_LOGGER_H__
-#define __SOUP_LOGGER_H__ 1
+#pragma once
 
-#include <libsoup/soup-types.h>
+#include "soup-types.h"
 
 G_BEGIN_DECLS
 
-#define SOUP_TYPE_LOGGER            (soup_logger_get_type ())
-#define SOUP_LOGGER(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), SOUP_TYPE_LOGGER, SoupLogger))
-#define SOUP_LOGGER_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass), SOUP_TYPE_LOGGER, SoupLoggerClass))
-#define SOUP_IS_LOGGER(obj)         (G_TYPE_CHECK_INSTANCE_TYPE ((obj), SOUP_TYPE_LOGGER))
-#define SOUP_IS_LOGGER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((obj), SOUP_TYPE_LOGGER))
-#define SOUP_LOGGER_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), SOUP_TYPE_LOGGER, SoupLoggerClass))
+#define SOUP_TYPE_LOGGER (soup_logger_get_type ())
+SOUP_AVAILABLE_IN_ALL
+G_DECLARE_FINAL_TYPE (SoupLogger, soup_logger, SOUP, LOGGER, GObject)
 
 typedef enum {
 	SOUP_LOGGER_LOG_NONE,
@@ -23,21 +19,6 @@ typedef enum {
 	SOUP_LOGGER_LOG_HEADERS,
 	SOUP_LOGGER_LOG_BODY
 } SoupLoggerLogLevel;
-
-typedef struct {
-	GObject parent;
-
-} SoupLogger;
-
-typedef struct {
-	GObjectClass parent_class;
-
-	/* Padding for future expansion */
-	void (*_libsoup_reserved1) (void);
-	void (*_libsoup_reserved2) (void);
-	void (*_libsoup_reserved3) (void);
-	void (*_libsoup_reserved4) (void);
-} SoupLoggerClass;
 
 typedef SoupLoggerLogLevel (*SoupLoggerFilter)  (SoupLogger         *logger,
 						 SoupMessage        *msg,
@@ -49,44 +30,32 @@ typedef void               (*SoupLoggerPrinter) (SoupLogger         *logger,
 						 const char         *data,
 						 gpointer            user_data);
 
-SOUP_AVAILABLE_IN_2_4
-GType       soup_logger_get_type    (void);
+SOUP_AVAILABLE_IN_ALL
+SoupLogger *soup_logger_new                 (SoupLoggerLogLevel level);
 
-#define SOUP_LOGGER_LEVEL         "level"
-#define SOUP_LOGGER_MAX_BODY_SIZE "max-body-size"
 
-SOUP_AVAILABLE_IN_2_4
-SoupLogger *soup_logger_new         (SoupLoggerLogLevel  level,
-				     int                 max_body_size);
-
-#ifndef SOUP_DISABLE_DEPRECATED
-SOUP_AVAILABLE_IN_2_4
-SOUP_DEPRECATED_IN_2_24_FOR(soup_session_add_feature)
-void        soup_logger_attach      (SoupLogger         *logger,
-				     SoupSession        *session);
-SOUP_AVAILABLE_IN_2_4
-SOUP_DEPRECATED_IN_2_24_FOR(soup_session_remove_feature)
-void        soup_logger_detach      (SoupLogger         *logger,
-				     SoupSession        *session);
-#endif
-
-SOUP_AVAILABLE_IN_2_4
+SOUP_AVAILABLE_IN_ALL
 void        soup_logger_set_request_filter  (SoupLogger        *logger,
 					     SoupLoggerFilter   request_filter,
 					     gpointer           filter_data,
 					     GDestroyNotify     destroy);
-SOUP_AVAILABLE_IN_2_4
+SOUP_AVAILABLE_IN_ALL
 void        soup_logger_set_response_filter (SoupLogger        *logger,
 					     SoupLoggerFilter   response_filter,
 					     gpointer           filter_data,
 					     GDestroyNotify     destroy);
 
-SOUP_AVAILABLE_IN_2_4
+SOUP_AVAILABLE_IN_ALL
 void        soup_logger_set_printer         (SoupLogger        *logger,
 					     SoupLoggerPrinter  printer,
 					     gpointer           printer_data,
 					     GDestroyNotify     destroy);
 
-G_END_DECLS
+SOUP_AVAILABLE_IN_ALL
+void        soup_logger_set_max_body_size  (SoupLogger        *logger,
+					     int                max_body_size);
 
-#endif /* __SOUP_LOGGER_H__ */
+SOUP_AVAILABLE_IN_ALL
+int         soup_logger_get_max_body_size  (SoupLogger        *logger);
+
+G_END_DECLS

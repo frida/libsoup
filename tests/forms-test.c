@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2007, 2008 Red Hat, Inc.
  */
@@ -36,14 +36,14 @@ static struct {
 };
 
 static void
-do_hello_test (int n, gboolean extra, const char *uri)
+do_hello_test_curl (int n, gboolean extra, const char *uri)
 {
 	GPtrArray *args;
 	char *title_arg = NULL, *name_arg = NULL;
 	char *str_stdout = NULL;
 	GError *error = NULL;
 
-	debug_printf (1, "%2d. '%s' '%s'%s: ", n * 2 + (extra ? 2 : 1),
+	debug_printf (1, "%2d. '%s' '%s'%s: \n", n * 2 + (extra ? 2 : 1),
 		      tests[n].title ? tests[n].title : "(null)",
 		      tests[n].name  ? tests[n].name  : "(null)",
 		      extra ? " + extra" : "");
@@ -86,7 +86,7 @@ do_hello_test (int n, gboolean extra, const char *uri)
 }
 
 static void
-do_hello_tests (gconstpointer uri)
+do_hello_tests_curl (gconstpointer uri)
 {
 	int n;
 
@@ -96,8 +96,59 @@ do_hello_tests (gconstpointer uri)
 	}
 
 	for (n = 0; n < G_N_ELEMENTS (tests); n++) {
-		do_hello_test (n, FALSE, uri);
-		do_hello_test (n, TRUE, uri);
+		do_hello_test_curl (n, FALSE, uri);
+		do_hello_test_curl (n, TRUE, uri);
+	}
+}
+
+static void
+do_hello_test_libsoup (int n, gboolean extra, const char *uri)
+{
+	SoupSession *session;
+	SoupMessage *msg;
+	GData *data;
+	GBytes *body;
+        char *encoded;
+
+	debug_printf (1, "%2d. '%s' '%s'%s: \n", n * 2 + (extra ? 2 : 1),
+		      tests[n].title ? tests[n].title : "(null)",
+		      tests[n].name  ? tests[n].name  : "(null)",
+		      extra ? " + extra" : "");
+
+	g_datalist_init (&data);
+	if (tests[n].title)
+		g_datalist_set_data (&data, "title", (gpointer)tests[n].title);
+	if (tests[n].name)
+		g_datalist_set_data (&data, "n@me", (gpointer)tests[n].name);
+	if (extra)
+		g_datalist_set_data (&data, "extra", (gpointer)"something");
+
+	session = soup_test_session_new (NULL);
+
+        encoded = soup_form_encode_datalist (&data);
+	msg = soup_message_new_from_encoded_form ("GET",
+						  uri,
+						  encoded);
+        g_free (encoded);
+	g_datalist_clear (&data);
+
+	body = soup_session_send_and_read (session, msg, NULL, NULL);
+	soup_test_assert_message_status (msg, SOUP_STATUS_OK);
+	g_assert_cmpmem (tests[n].result, strlen (tests[n].result), g_bytes_get_data (body, NULL), g_bytes_get_size (body));
+
+	g_bytes_unref (body);
+	g_object_unref (msg);
+	soup_test_session_abort_unref (session);
+}
+
+static void
+do_hello_tests_libsoup (gconstpointer uri)
+{
+	int n;
+
+	for (n = 0; n < G_N_ELEMENTS (tests); n++) {
+		do_hello_test_libsoup (n, FALSE, uri);
+		do_hello_test_libsoup (n, TRUE, uri);
 	}
 }
 
@@ -184,9 +235,10 @@ do_md5_test_libsoup (gconstpointer data)
 	char *contents, *md5;
 	gsize length;
 	SoupMultipart *multipart;
-	SoupBuffer *buffer;
+	GBytes *buffer;
 	SoupMessage *msg;
 	SoupSession *session;
+	GBytes *body;
 
 	g_test_bug ("601640");
 
@@ -195,23 +247,24 @@ do_md5_test_libsoup (gconstpointer data)
 		return;
 
 	multipart = soup_multipart_new (SOUP_FORM_MIME_TYPE_MULTIPART);
-	buffer = soup_buffer_new (SOUP_MEMORY_COPY, contents, length);
+	buffer = g_bytes_new (contents, length);
 	soup_multipart_append_form_file (multipart, "file",
 					 MD5_TEST_FILE_BASENAME,
 					 MD5_TEST_FILE_MIME_TYPE,
 					 buffer);
-	soup_buffer_free (buffer);
+	g_bytes_unref (buffer);
 	soup_multipart_append_form_string (multipart, "fmt", "text");
 
-	msg = soup_form_request_new_from_multipart (uri, multipart);
+	msg = soup_message_new_from_multipart (uri, multipart);
 	soup_multipart_free (multipart);
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC, NULL);
-	soup_session_send_message (session, msg);
+	session = soup_test_session_new (NULL);
+	body = soup_session_send_and_read (session, msg, NULL, NULL);
 
 	soup_test_assert_message_status (msg, SOUP_STATUS_OK);
-	g_assert_cmpstr (msg->response_body->data, ==, md5);
+	g_assert_cmpmem (md5, strlen (md5), g_bytes_get_data (body, NULL), g_bytes_get_size (body));
 
+	g_bytes_unref (body);
 	g_object_unref (msg);
 	soup_test_session_abort_unref (session);
 
@@ -248,16 +301,20 @@ do_form_decode_test (void)
 }
 
 static void
-hello_callback (SoupServer *server, SoupMessage *msg,
-		const char *path, GHashTable *query,
-		SoupClientContext *context, gpointer data)
+hello_callback (SoupServer        *server,
+		SoupServerMessage *msg,
+		const char        *path,
+		GHashTable        *query,
+		gpointer           data)
 {
 	char *title, *name, *fmt;
 	const char *content_type;
 	GString *buf;
+	const char *method;
 
-	if (msg->method != SOUP_METHOD_GET && msg->method != SOUP_METHOD_HEAD) {
-		soup_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED);
+	method = soup_server_message_get_method (msg);
+	if (method != SOUP_METHOD_GET && method != SOUP_METHOD_HEAD) {
+		soup_server_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED, NULL);
 		return;
 	}
 
@@ -294,17 +351,19 @@ hello_callback (SoupServer *server, SoupMessage *msg,
 		}
 	}
 
-	soup_message_set_response (msg, content_type,
-				   SOUP_MEMORY_TAKE,
-				   buf->str, buf->len);
+	soup_server_message_set_response (msg, content_type,
+					  SOUP_MEMORY_TAKE,
+					  buf->str, buf->len);
 	g_string_free (buf, FALSE);
-	soup_message_set_status (msg, SOUP_STATUS_OK);
+	soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
 }
 
 static void
-md5_get_callback (SoupServer *server, SoupMessage *msg,
-		  const char *path, GHashTable *query,
-		  SoupClientContext *context, gpointer data)
+md5_get_callback (SoupServer        *server,
+		  SoupServerMessage *msg,
+		  const char        *path,
+		  GHashTable        *query,
+		  gpointer           data)
 {
 	const char *file = NULL, *md5sum = NULL, *fmt;
 	const char *content_type;
@@ -338,72 +397,87 @@ md5_get_callback (SoupServer *server, SoupMessage *msg,
 			g_string_append_printf (buf, "%s", md5sum);
 	}
 
-	soup_message_set_response (msg, content_type,
-				   SOUP_MEMORY_TAKE,
-				   buf->str, buf->len);
+	soup_server_message_set_response (msg, content_type,
+					  SOUP_MEMORY_TAKE,
+					  buf->str, buf->len);
 	g_string_free (buf, FALSE);
-	soup_message_set_status (msg, SOUP_STATUS_OK);
+	soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
 }
 
 static void
-md5_post_callback (SoupServer *server, SoupMessage *msg,
-		   const char *path, GHashTable *query,
-		   SoupClientContext *context, gpointer data)
+md5_post_callback (SoupServer        *server,
+		   SoupServerMessage *msg,
+		   const char        *path,
+		   GHashTable        *query,
+		   gpointer           data)
 {
 	const char *content_type;
 	GHashTable *params;
 	const char *fmt;
 	char *filename, *md5sum, *redirect_uri;
-	SoupBuffer *file;
-	SoupURI *uri;
+	GBytes *file;
+	GUri *uri;
+	char *encoded_form;
+	SoupMultipart *multipart;
+	GBytes *body;
+	SoupMessageHeaders *request_headers;
 
-	content_type = soup_message_headers_get_content_type (msg->request_headers, NULL);
+	request_headers = soup_server_message_get_request_headers (msg);
+	content_type = soup_message_headers_get_content_type (request_headers, NULL);
 	if (!content_type || strcmp (content_type, "multipart/form-data") != 0) {
-		soup_message_set_status (msg, SOUP_STATUS_BAD_REQUEST);
+		soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
 		return;
 	}
 
-	params = soup_form_decode_multipart (msg, "file",
-					     &filename, NULL, &file);
+	body = soup_message_body_flatten (soup_server_message_get_request_body (msg));
+	multipart = soup_multipart_new_from_message (request_headers, body);
+	g_bytes_unref (body);
+	params = multipart ? soup_form_decode_multipart (multipart, "file", &filename, NULL, &file) : NULL;
 	if (!params) {
-		soup_message_set_status (msg, SOUP_STATUS_BAD_REQUEST);
+		soup_server_message_set_status (msg, SOUP_STATUS_BAD_REQUEST, NULL);
 		return;
 	}
 	fmt = g_hash_table_lookup (params, "fmt");
 
-	md5sum = g_compute_checksum_for_data (G_CHECKSUM_MD5,
-					      (gpointer)file->data,
-					      file->length);
-	soup_buffer_free (file);
+	md5sum = g_compute_checksum_for_bytes (G_CHECKSUM_MD5, file);
+	g_bytes_unref (file);
 
-	uri = soup_uri_copy (soup_message_get_uri (msg));
-	soup_uri_set_query_from_fields (uri,
-					"file", filename ? filename : "",
-					"md5sum", md5sum,
-					"fmt", fmt ? fmt : "html",
-					NULL);
-	redirect_uri = soup_uri_to_string (uri, FALSE);
+	encoded_form = soup_form_encode ("file", filename ? filename : "",
+					 "md5sum", md5sum,
+					 "fmt", fmt ? fmt : "html",
+					 NULL);
+	uri = soup_uri_copy (soup_server_message_get_uri (msg),
+			     SOUP_URI_QUERY, encoded_form,
+			     SOUP_URI_NONE);
+	g_free (encoded_form);
+	redirect_uri = g_uri_to_string (uri);
 
-	soup_message_set_redirect (msg, SOUP_STATUS_SEE_OTHER, redirect_uri);
+	soup_server_message_set_redirect (msg, SOUP_STATUS_SEE_OTHER, redirect_uri);
 
 	g_free (redirect_uri);
-	soup_uri_free (uri);
+	g_uri_unref (uri);
 	g_free (md5sum);
 	g_free (filename);
 	g_hash_table_destroy (params);
 }
 
 static void
-md5_callback (SoupServer *server, SoupMessage *msg,
-	      const char *path, GHashTable *query,
-	      SoupClientContext *context, gpointer data)
+md5_callback (SoupServer        *server,
+	      SoupServerMessage *msg,
+	      const char        *path,
+	      GHashTable        *query,
+	      gpointer           data)
 {
-	if (msg->method == SOUP_METHOD_GET || msg->method == SOUP_METHOD_HEAD)
-		md5_get_callback (server, msg, path, query, context, data);
-	else if (msg->method == SOUP_METHOD_POST)
-		md5_post_callback (server, msg, path, query, context, data);
+	const char *method;
+
+	method = soup_server_message_get_method (msg);
+
+	if (method == SOUP_METHOD_GET || method == SOUP_METHOD_HEAD)
+		md5_get_callback (server, msg, path, query, data);
+	else if (method == SOUP_METHOD_POST)
+		md5_post_callback (server, msg, path, query, data);
 	else
-		soup_message_set_status (msg, SOUP_STATUS_METHOD_NOT_ALLOWED);
+		soup_server_message_set_status (msg, SOUP_STATUS_METHOD_NOT_ALLOWED, NULL);
 }
 
 static gboolean run_tests = TRUE;
@@ -420,7 +494,7 @@ main (int argc, char **argv)
 {
 	GMainLoop *loop;
 	SoupServer *server;
-	SoupURI *base_uri, *uri;
+	GUri *base_uri, *uri;
 	int ret = 0;
 
 	test_init (argc, argv, no_test_entry);
@@ -435,27 +509,28 @@ main (int argc, char **argv)
 	loop = g_main_loop_new (NULL, TRUE);
 
 	if (run_tests) {
-		uri = soup_uri_new_with_base (base_uri, "/hello");
-		g_test_add_data_func_full ("/forms/hello", soup_uri_to_string (uri, FALSE), do_hello_tests, g_free);
-		soup_uri_free (uri);
+		uri = g_uri_parse_relative (base_uri, "/hello", SOUP_HTTP_URI_FLAGS, NULL);
+		g_test_add_data_func_full ("/forms/hello/curl", g_uri_to_string (uri), do_hello_tests_curl, g_free);
+		g_test_add_data_func_full ("/forms/hello/libsoup", g_uri_to_string (uri), do_hello_tests_libsoup, g_free);
+		g_uri_unref (uri);
 
-		uri = soup_uri_new_with_base (base_uri, "/md5");
-		g_test_add_data_func_full ("/forms/md5/curl", soup_uri_to_string (uri, FALSE), do_md5_test_curl, g_free);
-		g_test_add_data_func_full ("/forms/md5/libsoup", soup_uri_to_string (uri, FALSE), do_md5_test_libsoup, g_free);
-		soup_uri_free (uri);
+		uri = g_uri_parse_relative (base_uri, "/md5", SOUP_HTTP_URI_FLAGS, NULL);
+		g_test_add_data_func_full ("/forms/md5/curl", g_uri_to_string (uri), do_md5_test_curl, g_free);
+		g_test_add_data_func_full ("/forms/md5/libsoup", g_uri_to_string (uri), do_md5_test_libsoup, g_free);
+		g_uri_unref (uri);
 
 		g_test_add_func ("/forms/decode", do_form_decode_test);
 
 		ret = g_test_run ();
 	} else {
-		g_print ("Listening on port %d\n", base_uri->port);
+		g_print ("Listening on port %d\n", g_uri_get_port (base_uri));
 		g_main_loop_run (loop);
 	}
 
 	g_main_loop_unref (loop);
 
 	soup_test_server_quit_unref (server);
-	soup_uri_free (base_uri);
+	g_uri_unref (base_uri);
 
 	if (run_tests)
 		test_cleanup ();

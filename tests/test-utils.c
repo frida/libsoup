@@ -1,18 +1,25 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 
 #include "test-utils.h"
+#include "soup-misc.h"
+#include "soup-session-private.h"
+#include "soup-server-private.h"
 
 #include <glib/gprintf.h>
+#ifdef G_OS_UNIX
+#include <gio/gunixsocketaddress.h>
+#endif
 
 #include <locale.h>
 #include <signal.h>
 
 #ifdef HAVE_APACHE
 static gboolean apache_running;
+static char *server_root = NULL;
 #endif
 
 static SoupLogger *logger;
-static SoupBuffer *index_buffer;
+static GBytes *index_buffer;
 
 int debug_level;
 gboolean expect_warning, tls_available;
@@ -111,7 +118,7 @@ test_cleanup (void)
 	if (logger)
 		g_object_unref (logger);
 	if (index_buffer)
-		soup_buffer_free (index_buffer);
+		g_bytes_unref (index_buffer);
 
 	g_main_context_unref (g_main_context_default ());
 
@@ -122,9 +129,16 @@ void
 debug_printf (int level, const char *format, ...)
 {
 	va_list args;
+        static char last_char = '\n';
 
 	if (debug_level < level)
 		return;
+
+        /* Very hacky solution to outputing in the TAP format,
+         * every line starts with # */
+        if (last_char == '\n')
+                g_printf ("# ");
+        last_char = format[strlen (format) - 1];
 
 	va_start (args, format);
 	g_vprintf (format, args);
@@ -150,20 +164,18 @@ static gboolean
 apache_cmd (const char *cmd)
 {
 	GPtrArray *argv;
-	char *server_root, *cwd, *pid_file;
+	char *cwd, *pid_file;
 #ifdef HAVE_APACHE_2_4
 	char *default_runtime_dir;
 #endif
 	int status;
 	gboolean ok;
+	GString *str;
+	guint i;
 
-	server_root = g_test_build_filename (G_TEST_BUILT, "", NULL);
-	if (!g_path_is_absolute (server_root)) {
-		char *abs_server_root;
-
-		abs_server_root = g_canonicalize_filename (server_root, NULL);
-		g_free (server_root);
-		server_root = abs_server_root;
+	if (server_root == NULL) {
+		g_test_message ("Server root not initialized");
+		return FALSE;
 	}
 
 	cwd = g_get_current_dir ();
@@ -190,12 +202,23 @@ apache_cmd (const char *cmd)
 	g_ptr_array_add (argv, (char *)cmd);
 	g_ptr_array_add (argv, NULL);
 
+	str = g_string_new ("Apache command:");
+
+	for (i = 0; i < argv->len - 1; i++) {
+		char *escaped = g_shell_quote (argv->pdata[i]);
+		g_string_append_c (str, ' ');
+		g_string_append (str, escaped);
+		g_free (escaped);
+	}
+
+	g_test_message ("%s", str->str);
+	g_string_free (str, TRUE);
+
 	ok = g_spawn_sync (cwd, (char **)argv->pdata, NULL, 0, NULL, NULL,
 			   NULL, NULL, &status, NULL);
 	if (ok)
 		ok = (status == 0);
 
-	g_free (server_root);
 	g_free (cwd);
 	g_free (pid_file);
 #ifdef HAVE_APACHE_2_4
@@ -203,6 +226,7 @@ apache_cmd (const char *cmd)
 #endif
 	g_ptr_array_free (argv, TRUE);
 
+	g_test_message (ok ? "-> success" : "-> failed");
 	return ok;
 }
 
@@ -213,6 +237,8 @@ apache_init (void)
 	 * suitably-configured Apache server */
 	if (g_getenv ("SOUP_TESTS_ALREADY_RUNNING_APACHE"))
 		return;
+
+	server_root = soup_test_build_filename_abs (G_TEST_BUILT, "", NULL);
 
 	if (!apache_cmd ("start")) {
 		g_printerr ("Could not start apache\n");
@@ -241,23 +267,23 @@ apache_cleanup (void)
 		while (kill (pid, 0) == 0)
 			g_usleep (100);
 	}
+
+	g_clear_pointer (&server_root, g_free);
 }
 
 #endif /* HAVE_APACHE */
 
 SoupSession *
-soup_test_session_new (GType type, ...)
+soup_test_session_new (const char *propname, ...)
 {
 	va_list args;
-	const char *propname;
 	SoupSession *session;
 	GTlsDatabase *tlsdb;
 	char *cafile;
 	GError *error = NULL;
 
-	va_start (args, type);
-	propname = va_arg (args, const char *);
-	session = (SoupSession *)g_object_new_valist (type, propname, args);
+	va_start (args, propname);
+	session = (SoupSession *)g_object_new_valist (SOUP_TYPE_SESSION, propname, args);
 	va_end (args);
 
 	if (tls_available) {
@@ -275,16 +301,14 @@ soup_test_session_new (GType type, ...)
 				g_assert_no_error (error);
 		}
 
-		g_object_set (G_OBJECT (session),
-			      SOUP_SESSION_TLS_DATABASE, tlsdb,
-			      NULL);
+		soup_session_set_tls_database (session, tlsdb);
 		g_clear_object (&tlsdb);
 	}
 
 	if (http_debug_level && !logger) {
 		SoupLoggerLogLevel level = MIN ((SoupLoggerLogLevel)http_debug_level, SOUP_LOGGER_LOG_BODY);
 
-		logger = soup_logger_new (level, -1);
+		logger = soup_logger_new (level);
 	}
 
 	if (logger)
@@ -302,12 +326,95 @@ soup_test_session_abort_unref (SoupSession *session)
 	g_object_unref (session);
 }
 
+typedef struct {
+	SoupMessage *msg;
+	GBytes *body;
+	GError *error;
+	gboolean done;
+        gboolean message_finished;
+} SendAsyncData;
+
+static void
+send_and_read_async_ready_cb (SoupSession   *session,
+			      GAsyncResult  *result,
+			      SendAsyncData *data)
+{
+	data->done = TRUE;
+	g_assert_true (soup_session_get_async_result_message (session, result) == data->msg);
+	data->body = soup_session_send_and_read_finish (session, result, &data->error);
+        if (g_error_matches (data->error, SOUP_SESSION_ERROR, SOUP_SESSION_ERROR_MESSAGE_ALREADY_IN_QUEUE))
+                data->message_finished = TRUE;
+}
+
+static void
+on_message_finished (SoupMessage   *msg,
+                     SendAsyncData *data)
+{
+        data->message_finished = TRUE;
+}
+
+GBytes *
+soup_test_session_async_send (SoupSession  *session,
+			      SoupMessage  *msg,
+			      GCancellable *cancellable,
+			      GError      **error)
+{
+	GMainContext *async_context = g_main_context_ref_thread_default ();
+	gulong signal_id;
+	SendAsyncData data = { msg, NULL, NULL, FALSE, FALSE };
+
+	signal_id = g_signal_connect (msg, "finished",
+                                      G_CALLBACK (on_message_finished), &data);
+
+	soup_session_send_and_read_async (session, msg, G_PRIORITY_DEFAULT, cancellable,
+					  (GAsyncReadyCallback)send_and_read_async_ready_cb, &data);
+
+	while (!data.done || !data.message_finished)
+		g_main_context_iteration (async_context, TRUE);
+
+	g_signal_handler_disconnect (msg, signal_id);
+
+	if (data.error)
+		g_propagate_error (error, data.error);
+
+        g_main_context_unref (async_context);
+	return data.body;
+}
+
+guint
+soup_test_session_send_message (SoupSession *session,
+				SoupMessage *msg)
+{
+	GInputStream *stream;
+
+	stream = soup_session_send (session, msg, NULL, NULL);
+	if (stream)
+		g_object_unref (stream);
+
+	return soup_message_get_status (msg);
+}
+
+const char *
+soup_test_server_get_unix_path (SoupServer *server)
+{
+	return g_object_get_data (G_OBJECT (server), "unix-socket-path");
+}
+
 static void
 server_listen (SoupServer *server)
 {
 	GError *error = NULL;
+        SoupServerListenOptions options = 0;
+	GSocket *socket;
 
-	soup_server_listen_local (server, 0, 0, &error);
+        if (g_getenv ("SOUP_TEST_NO_IPV6"))
+                options = SOUP_SERVER_LISTEN_IPV4_ONLY;
+
+	socket = g_object_get_data (G_OBJECT (server), "listen-socket");
+	if (socket != NULL)
+		soup_server_listen_socket (server, socket, 0, &error);
+	else
+		soup_server_listen_local (server, 0, options, &error);
 	if (error) {
 		g_printerr ("Unable to create server: %s\n", error->message);
 		exit (1);
@@ -349,6 +456,20 @@ run_server_thread (gpointer user_data)
 	return NULL;
 }
 
+void
+soup_test_server_run_in_thread (SoupServer *server)
+{
+	GThread *thread;
+
+	g_mutex_lock (&server_start_mutex);
+
+	thread = g_thread_new ("server_thread", run_server_thread, server);
+	g_cond_wait (&server_start_cond, &server_start_mutex);
+	g_mutex_unlock (&server_start_mutex);
+
+	g_object_set_data (G_OBJECT (server), "thread", thread);
+}
+
 SoupServer *
 soup_test_server_new (SoupTestServerOptions options)
 {
@@ -372,60 +493,93 @@ soup_test_server_new (SoupTestServerOptions options)
 		}
 	}
 
-	server = soup_server_new (SOUP_SERVER_TLS_CERTIFICATE, cert,
+	server = soup_server_new ("tls-certificate", cert,
 				  NULL);
 	g_clear_object (&cert);
 
+        soup_server_set_http2_enabled (server, options & SOUP_TEST_SERVER_HTTP2);
+
 	g_object_set_data (G_OBJECT (server), "options", GUINT_TO_POINTER (options));
 
-	if (options & SOUP_TEST_SERVER_IN_THREAD) {
-		GThread *thread;
+	if (options & SOUP_TEST_SERVER_UNIX_SOCKET) {
+#ifdef G_OS_UNIX
+		char *socket_dir, *socket_path;
+		GSocket *listen_socket;
+		GSocketAddress *listen_address;
 
-		g_mutex_lock (&server_start_mutex);
+		socket_dir = g_dir_make_tmp ("unix-socket-test-XXXXXX", NULL);
+		socket_path = g_build_filename (socket_dir, "socket", NULL);
+		g_object_set_data_full (G_OBJECT (server), "unix-socket-path", socket_path, g_free);
+		g_free (socket_dir);
 
-		thread = g_thread_new ("server_thread", run_server_thread, server);
-		g_cond_wait (&server_start_cond, &server_start_mutex);
-		g_mutex_unlock (&server_start_mutex);
+		listen_socket = g_socket_new (G_SOCKET_FAMILY_UNIX,
+					      G_SOCKET_TYPE_STREAM,
+					      G_SOCKET_PROTOCOL_DEFAULT,
+					      &error);
+		if (listen_socket == NULL) {
+			g_printerr ("Unable to create unix socket: %s\n", error->message);
+			exit (1);
+		}
 
-		g_object_set_data (G_OBJECT (server), "thread", thread);
-	} else if (!(options & SOUP_TEST_SERVER_NO_DEFAULT_LISTENER))
+		listen_address = g_unix_socket_address_new (socket_path);
+		if (!g_socket_bind (listen_socket, listen_address, TRUE, &error)) {
+			g_printerr ("Unable to bind unix socket to %s: %s\n", socket_path, error->message);
+			exit (1);
+		}
+		g_object_unref (listen_address);
+		if (!g_socket_listen (listen_socket, &error)) {
+			g_printerr ("Unable to listen on unix socket: %s\n", error->message);
+			exit (1);
+		}
+
+		g_object_set_data_full (G_OBJECT (server), "listen-socket", listen_socket, g_object_unref);
+#else
+		g_printerr ("Unix socket support not available\n");
+		exit (1);
+#endif
+	}
+
+	if (options & SOUP_TEST_SERVER_IN_THREAD)
+		soup_test_server_run_in_thread (server);
+	else if (!(options & SOUP_TEST_SERVER_NO_DEFAULT_LISTENER))
 		server_listen (server);
 
 	return server;
 }
 
-static SoupURI *
+static GUri *
 find_server_uri (SoupServer *server, const char *scheme, const char *host)
 {
 	GSList *uris, *u;
-	SoupURI *uri, *ret_uri = NULL;
+	GUri *uri, *ret_uri = NULL;
 
 	uris = soup_server_get_uris (server);
 	for (u = uris; u; u = u->next) {
 		uri = u->data;
 
-		if (scheme && strcmp (uri->scheme, scheme) != 0)
+		if (scheme && strcmp (g_uri_get_scheme (uri), scheme) != 0)
 			continue;
-		if (host && strcmp (uri->host, host) != 0)
+		if (host && strcmp (g_uri_get_host (uri), host) != 0)
 			continue;
 
-		ret_uri = soup_uri_copy (uri);
+		ret_uri = g_uri_ref (uri);
 		break;
 	}
-	g_slist_free_full (uris, (GDestroyNotify)soup_uri_free);
+	g_slist_free_full (uris, (GDestroyNotify)g_uri_unref);
 
 	return ret_uri;
 }
 
-static SoupURI *
+static GUri *
 add_listener (SoupServer *server, const char *scheme, const char *host)
 {
 	SoupServerListenOptions options = 0;
 	GError *error = NULL;
 
-	if (!g_strcmp0 (scheme, SOUP_URI_SCHEME_HTTPS))
+	if (!g_strcmp0 (scheme, "https"))
 		options |= SOUP_SERVER_LISTEN_HTTPS;
-	if (!g_strcmp0 (host, "127.0.0.1"))
+
+	if (!g_strcmp0 (host, "127.0.0.1") || g_getenv ("SOUP_TEST_NO_IPV6"))
 		options |= SOUP_SERVER_LISTEN_IPV4_ONLY;
 	else if (!g_strcmp0 (host, "::1"))
 		options |= SOUP_SERVER_LISTEN_IPV6_ONLY;
@@ -444,7 +598,7 @@ typedef struct {
 	const char *scheme;
 	const char *host;
 
-	SoupURI *uri;
+	GUri *uri;
 } AddListenerData;
 
 static gboolean
@@ -460,12 +614,12 @@ add_listener_in_thread (gpointer user_data)
 	return FALSE;
 }
 
-SoupURI *
+GUri *
 soup_test_server_get_uri (SoupServer    *server,
 			  const char    *scheme,
 			  const char    *host)
 {
-	SoupURI *uri;
+	GUri *uri;
 	GMainLoop *loop;
 
 	uri = find_server_uri (server, scheme, host);
@@ -582,102 +736,48 @@ async_as_sync_callback (GObject      *object,
 	g_main_loop_quit (data->loop);
 }
 
-typedef struct {
-	SoupRequest  *req;
-	GCancellable *cancellable;
-	SoupTestRequestFlags flags;
-} CancelData;
-
-static CancelData *
-create_cancel_data (SoupRequest          *req,
-		    GCancellable         *cancellable,
-		    SoupTestRequestFlags  flags)
-{
-	CancelData *cancel_data;
-
-	if (!flags)
-		return NULL;
-
-	cancel_data = g_slice_new0 (CancelData);
-	cancel_data->flags = flags;
-	if (flags & SOUP_TEST_REQUEST_CANCEL_MESSAGE && SOUP_IS_REQUEST_HTTP (req))
-		cancel_data->req = g_object_ref (req);
-	else if (flags & SOUP_TEST_REQUEST_CANCEL_CANCELLABLE)
-		cancel_data->cancellable = g_object_ref (cancellable);
-	return cancel_data;
-}
-
-inline static void
-cancel_message_or_cancellable (CancelData *cancel_data)
-{
-	if (cancel_data->flags & SOUP_TEST_REQUEST_CANCEL_MESSAGE) {
-		SoupRequest *req = cancel_data->req;
-		SoupMessage *msg = soup_request_http_get_message (SOUP_REQUEST_HTTP (req));
-		soup_session_cancel_message (soup_request_get_session (req), msg,
-					     SOUP_STATUS_CANCELLED);
-		g_object_unref (msg);
-		g_object_unref (req);
-	} else if (cancel_data->flags & SOUP_TEST_REQUEST_CANCEL_CANCELLABLE) {
-		g_cancellable_cancel (cancel_data->cancellable);
-		g_object_unref (cancel_data->cancellable);
-	}
-	g_slice_free (CancelData, cancel_data);
-}
-
 static gboolean
-cancel_request_timeout (gpointer data)
+cancel_request_timeout (GCancellable *cancellable)
 {
-	cancel_message_or_cancellable ((CancelData *) data);
+	g_cancellable_cancel (cancellable);
 	return FALSE;
 }
 
-static gpointer
-cancel_request_thread (gpointer data)
-{
-	g_usleep (100000); /* .1s */
-	cancel_message_or_cancellable ((CancelData *) data);
-	return NULL;
-}
-
 GInputStream *
-soup_test_request_send (SoupRequest   *req,
+soup_test_request_send (SoupSession   *session,
+			SoupMessage   *msg,
 			GCancellable  *cancellable,
 			guint          flags,
 			GError       **error)
 {
 	AsyncAsSyncData data;
 	GInputStream *stream;
-	CancelData *cancel_data = create_cancel_data (req, cancellable, flags);
-
-	if (SOUP_IS_SESSION_SYNC (soup_request_get_session (req))) {
-		GThread *thread;
-
-		if (cancel_data)
-			thread = g_thread_new ("cancel_request_thread", cancel_request_thread,
-					       cancel_data);
-		stream = soup_request_send (req, cancellable, error);
-		if (cancel_data)
-			g_thread_unref (thread);
-		return stream;
-	}
 
 	data.loop = g_main_loop_new (g_main_context_get_thread_default (), FALSE);
-	if (cancel_data &&
-	    (flags & SOUP_TEST_REQUEST_CANCEL_SOON || flags & SOUP_TEST_REQUEST_CANCEL_IMMEDIATE)) {
+	if (flags & SOUP_TEST_REQUEST_CANCEL_SOON || flags & SOUP_TEST_REQUEST_CANCEL_IMMEDIATE) {
 		guint interval = flags & SOUP_TEST_REQUEST_CANCEL_SOON ? 100 : 0;
-		g_timeout_add_full (G_PRIORITY_HIGH, interval, cancel_request_timeout, cancel_data, NULL);
+		g_timeout_add_full (G_PRIORITY_HIGH, interval,
+				    (GSourceFunc)cancel_request_timeout,
+				    g_object_ref (cancellable), g_object_unref);
 	}
-	if (cancel_data && (flags & SOUP_TEST_REQUEST_CANCEL_PREEMPTIVE))
-		cancel_message_or_cancellable (cancel_data);
-	soup_request_send_async (req, cancellable, async_as_sync_callback, &data);
+	if (flags & SOUP_TEST_REQUEST_CANCEL_PREEMPTIVE)
+		g_cancellable_cancel (cancellable);
+
+	soup_session_send_async (session, msg, G_PRIORITY_DEFAULT, cancellable,
+				 async_as_sync_callback, &data);
 	g_main_loop_run (data.loop);
 
-	stream = soup_request_send_finish (req, data.result, error);
+	g_assert_true (soup_session_get_async_result_message (session, data.result) == msg);
 
-	if (cancel_data && (flags &  SOUP_TEST_REQUEST_CANCEL_AFTER_SEND_FINISH)) {
+	stream = soup_session_send_finish (session, data.result, error);
+
+	if (flags & SOUP_TEST_REQUEST_CANCEL_AFTER_SEND_FINISH) {
 		GMainContext *context;
 
-		cancel_message_or_cancellable (cancel_data);
+                if (flags & SOUP_TEST_REQUEST_CANCEL_BY_SESSION)
+                        soup_session_cancel_message (session, msg);
+                else
+                        g_cancellable_cancel (cancellable);
 
 		context = g_main_loop_get_context (data.loop);
 		while (g_main_context_pending (context))
@@ -691,8 +791,7 @@ soup_test_request_send (SoupRequest   *req,
 }
 
 gboolean
-soup_test_request_read_all (SoupRequest   *req,
-			    GInputStream  *stream,
+soup_test_request_read_all (GInputStream  *stream,
 			    GCancellable  *cancellable,
 			    GError       **error)
 {
@@ -700,42 +799,29 @@ soup_test_request_read_all (SoupRequest   *req,
 	AsyncAsSyncData data;
 	gsize nread;
 
-	if (!SOUP_IS_SESSION_SYNC (soup_request_get_session (req)))
-		data.loop = g_main_loop_new (g_main_context_get_thread_default (), FALSE);
-	else
-		data.loop = NULL;
+        data.loop = g_main_loop_new (g_main_context_get_thread_default (), FALSE);
 
 	do {
-		if (!data.loop) {
-			nread = g_input_stream_read (stream, buf, sizeof (buf),
-						     cancellable, error);
-		} else {
-			g_input_stream_read_async (stream, buf, sizeof (buf),
-						   G_PRIORITY_DEFAULT, cancellable,
-						   async_as_sync_callback, &data);
-			g_main_loop_run (data.loop);
-			nread = g_input_stream_read_finish (stream, data.result, error);
-			g_object_unref (data.result);
-		}
+                g_input_stream_read_async (stream, buf, sizeof (buf),
+					   G_PRIORITY_DEFAULT, cancellable,
+					   async_as_sync_callback, &data);
+                g_main_loop_run (data.loop);
+                nread = g_input_stream_read_finish (stream, data.result, error);
+                g_object_unref (data.result);
 	} while (nread > 0);
 
-	if (data.loop)
-		g_main_loop_unref (data.loop);
+	g_main_loop_unref (data.loop);
 
 	return nread == 0;
 }
 
 gboolean
-soup_test_request_close_stream (SoupRequest   *req,
-				GInputStream  *stream,
+soup_test_request_close_stream (GInputStream  *stream,
 				GCancellable  *cancellable,
 				GError       **error)
 {
 	AsyncAsSyncData data;
 	gboolean ok;
-
-	if (SOUP_IS_SESSION_SYNC (soup_request_get_session (req)))
-		return g_input_stream_close (stream, cancellable, error);
 
 	data.loop = g_main_loop_new (g_main_context_get_thread_default (), FALSE);
 
@@ -777,7 +863,7 @@ soup_test_register_resources (void)
 	registered = TRUE;
 }
 
-SoupBuffer *
+GBytes *
 soup_test_load_resource (const char  *name,
 			 GError     **error)
 {
@@ -790,16 +876,10 @@ soup_test_load_resource (const char  *name,
 	bytes = g_resources_lookup_data (path, G_RESOURCE_LOOKUP_FLAGS_NONE, error);
 	g_free (path);
 
-	if (!bytes)
-		return NULL;
-
-	return soup_buffer_new_with_owner (g_bytes_get_data (bytes, NULL),
-					   g_bytes_get_size (bytes),
-					   bytes,
-					   (GDestroyNotify) g_bytes_unref);
+        return bytes;
 }
 
-SoupBuffer *
+GBytes *
 soup_test_get_index (void)
 {
 	if (!index_buffer) {
@@ -815,10 +895,46 @@ soup_test_get_index (void)
 		}
 		g_free (path);
 
-		index_buffer = soup_buffer_new (SOUP_MEMORY_TAKE, contents, length);
+		index_buffer = g_bytes_new_take (contents, length);
 	}
 
 	return index_buffer;
+}
+
+char *
+soup_test_build_filename_abs (GTestFileType  file_type,
+                              const gchar   *first_path,
+                              ...)
+{
+        const gchar *pathv[16];
+        gsize num_path_segments;
+        char *path;
+        char *path_abs;
+        va_list ap;
+
+        va_start (ap, first_path);
+
+        pathv[0] = g_test_get_dir (file_type);
+        pathv[1] = first_path;
+
+        for (num_path_segments = 2; num_path_segments < G_N_ELEMENTS (pathv); num_path_segments++) {
+                pathv[num_path_segments] = va_arg (ap, const char *);
+                if (pathv[num_path_segments] == NULL)
+                        break;
+        }
+
+        va_end (ap);
+
+        g_assert_cmpint (num_path_segments, <, G_N_ELEMENTS (pathv));
+
+        path = g_build_filenamev ((gchar **) pathv);
+        if (g_path_is_absolute (path))
+                return path;
+
+        path_abs = g_canonicalize_filename (path, NULL);
+        g_free (path);
+
+        return path_abs;
 }
 
 #ifndef G_HAVE_ISO_VARARGS

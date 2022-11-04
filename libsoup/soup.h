@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2000-2003, Ximian, Inc.
  */
@@ -8,59 +8,44 @@
 
 #define __SOUP_H_INSIDE__
 
-#include <libsoup/soup-address.h>
-#include <libsoup/soup-auth.h>
-#include <libsoup/soup-auth-domain.h>
-#include <libsoup/soup-auth-domain-basic.h>
-#include <libsoup/soup-auth-domain-digest.h>
-#include <libsoup/soup-auth-manager.h>
-#include <libsoup/soup-cache.h>
-#include <libsoup/soup-content-decoder.h>
-#include <libsoup/soup-content-sniffer.h>
-#include <libsoup/soup-cookie.h>
-#include <libsoup/soup-cookie-jar.h>
-#include <libsoup/soup-cookie-jar-db.h>
-#include <libsoup/soup-cookie-jar-text.h>
-#include <libsoup/soup-date.h>
-#include <libsoup/soup-enum-types.h>
-#include <libsoup/soup-form.h>
-#include <libsoup/soup-headers.h>
-#include <libsoup/soup-hsts-enforcer.h>
-#include <libsoup/soup-hsts-enforcer-db.h>
-#include <libsoup/soup-hsts-policy.h>
-#include <libsoup/soup-logger.h>
-#include <libsoup/soup-message.h>
-#include <libsoup/soup-method.h>
-#include <libsoup/soup-misc.h>
-#include <libsoup/soup-multipart.h>
-#include <libsoup/soup-multipart-input-stream.h>
-#include <libsoup/soup-proxy-resolver.h>
-#include <libsoup/soup-proxy-resolver-default.h>
-#include <libsoup/soup-proxy-uri-resolver.h>
-#include <libsoup/soup-request.h>
-#include <libsoup/soup-requester.h>
-#include <libsoup/soup-request-data.h>
-#include <libsoup/soup-request-file.h>
-#include <libsoup/soup-request-http.h>
-#include <libsoup/soup-server.h>
-#include <libsoup/soup-session-async.h>
-#include <libsoup/soup-session-feature.h>
-#include <libsoup/soup-session-sync.h>
-#include <libsoup/soup-socket.h>
-#include <libsoup/soup-status.h>
-#include <libsoup/soup-tld.h>
-#include <libsoup/soup-uri.h>
-#include <libsoup/soup-value-utils.h>
-#include <libsoup/soup-version.h>
-#include <libsoup/soup-websocket.h>
-#include <libsoup/soup-websocket-connection.h>
-#include <libsoup/soup-websocket-extension.h>
-#include <libsoup/soup-websocket-extension-deflate.h>
-#include <libsoup/soup-websocket-extension-manager.h>
-#include <libsoup/soup-xmlrpc.h>
-#include <libsoup/soup-xmlrpc-old.h>
-
-#include <libsoup/soup-autocleanups.h>
+#include "auth/soup-auth.h"
+#include "auth/soup-auth-manager.h"
+#include "cache/soup-cache.h"
+#include "content-decoder/soup-content-decoder.h"
+#include "content-sniffer/soup-content-sniffer.h"
+#include "cookies/soup-cookie.h"
+#include "cookies/soup-cookie-jar.h"
+#include "cookies/soup-cookie-jar-db.h"
+#include "cookies/soup-cookie-jar-text.h"
+#include "soup-date-utils.h"
+#include "soup-enum-types.h"
+#include "soup-form.h"
+#include "soup-headers.h"
+#include "hsts/soup-hsts-enforcer.h"
+#include "hsts/soup-hsts-enforcer-db.h"
+#include "hsts/soup-hsts-policy.h"
+#include "soup-logger.h"
+#include "soup-message.h"
+#include "soup-message-metrics.h"
+#include "soup-method.h"
+#include "soup-multipart.h"
+#include "soup-multipart-input-stream.h"
+#include "server/soup-auth-domain.h"
+#include "server/soup-auth-domain-basic.h"
+#include "server/soup-auth-domain-digest.h"
+#include "server/soup-server.h"
+#include "server/soup-server-message.h"
+#include "soup-session.h"
+#include "soup-session-feature.h"
+#include "soup-status.h"
+#include "soup-tld.h"
+#include "soup-uri-utils.h"
+#include "soup-version.h"
+#include "websocket/soup-websocket.h"
+#include "websocket/soup-websocket-connection.h"
+#include "websocket/soup-websocket-extension.h"
+#include "websocket/soup-websocket-extension-deflate.h"
+#include "websocket/soup-websocket-extension-manager.h"
 
 #undef __SOUP_H_INSIDE__
 

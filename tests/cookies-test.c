@@ -1,37 +1,42 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2010 Igalia S.L.
  */
 
 #include "test-utils.h"
 
-SoupServer *server;
-SoupURI *first_party_uri, *third_party_uri;
-const char *first_party = "http://127.0.0.1/";
-const char *third_party = "http://localhost/";
+static SoupServer *server;
+static GUri *first_party_uri, *third_party_uri;
 
 static void
-server_callback (SoupServer *server, SoupMessage *msg,
-		 const char *path, GHashTable *query,
-		 SoupClientContext *context, gpointer data)
+server_callback (SoupServer        *server,
+		 SoupServerMessage *msg,
+		 const char        *path,
+		 GHashTable        *query,
+		 gpointer           data)
 {
+	SoupMessageHeaders *response_headers;
+	SoupMessageHeaders *request_headers;
+
+	response_headers = soup_server_message_get_response_headers (msg);
+	request_headers = soup_server_message_get_request_headers (msg);
 	if (g_str_equal (path, "/index.html")) {
-		soup_message_headers_replace (msg->response_headers,
+		soup_message_headers_replace (response_headers,
 					      "Set-Cookie",
 					      "foo=bar");
 	} else if (g_str_equal (path, "/foo.jpg")) {
-		soup_message_headers_replace (msg->response_headers,
+		soup_message_headers_replace (response_headers,
 					      "Set-Cookie",
 					      "baz=qux");
-	} else if (soup_message_headers_get_one (msg->request_headers,
+	} else if (soup_message_headers_get_one (request_headers,
 						 "Echo-Set-Cookie")) {
-		soup_message_headers_replace (msg->response_headers,
+		soup_message_headers_replace (response_headers,
 					      "Set-Cookie",
-					      soup_message_headers_get_one (msg->request_headers,
+					      soup_message_headers_get_one (request_headers,
 									    "Echo-Set-Cookie"));
 	}
 
-	soup_message_set_status (msg, SOUP_STATUS_OK);
+	soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
 }
 
 typedef struct {
@@ -53,12 +58,12 @@ do_cookies_accept_policy_test (void)
 {
 	SoupSession *session;
 	SoupMessage *msg;
-	SoupURI *uri;
+	GUri *uri;
 	SoupCookieJar *jar;
 	GSList *l, *p;
 	int i;
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC, NULL);
+	session = soup_test_session_new (NULL);
 	soup_session_add_feature_by_type (session, SOUP_TYPE_COOKIE_JAR);
 	jar = SOUP_COOKIE_JAR (soup_session_get_feature (session, SOUP_TYPE_COOKIE_JAR));
 
@@ -69,26 +74,26 @@ do_cookies_accept_policy_test (void)
 		 * test_server, so let's swap first and third party here
 		 * to simulate a cookie coming from a third party.
 		 */
-		uri = soup_uri_new_with_base (first_party_uri, "/foo.jpg");
+		uri = g_uri_parse_relative (first_party_uri, "/foo.jpg", SOUP_HTTP_URI_FLAGS, NULL);
 		msg = soup_message_new_from_uri ("GET", uri);
 		soup_message_set_first_party (msg, third_party_uri);
-		soup_session_send_message (session, msg);
-		soup_uri_free (uri);
+		soup_test_session_send_message (session, msg);
+		g_uri_unref (uri);
 		g_object_unref (msg);
 
-		uri = soup_uri_new_with_base (first_party_uri, "/index.html");
+		uri = g_uri_parse_relative (first_party_uri, "/index.html", SOUP_HTTP_URI_FLAGS, NULL);
 		msg = soup_message_new_from_uri ("GET", uri);
 		soup_message_set_first_party (msg, first_party_uri);
-		soup_session_send_message (session, msg);
-		soup_uri_free (uri);
+		soup_test_session_send_message (session, msg);
+		g_uri_unref (uri);
 		g_object_unref (msg);
-
+        
 		if (validResults[i].try_third_party_again) {
-			uri = soup_uri_new_with_base (first_party_uri, "/foo.jpg");
-			msg = soup_message_new_from_uri ("GET", uri);
+                        uri = g_uri_parse_relative (first_party_uri, "/foo.jpg", SOUP_HTTP_URI_FLAGS, NULL);
+                        msg = soup_message_new_from_uri ("GET", uri);
 			soup_message_set_first_party (msg, third_party_uri);
-			soup_session_send_message (session, msg);
-			soup_uri_free (uri);
+			soup_test_session_send_message (session, msg);
+			g_uri_unref (uri);
 			g_object_unref (msg);
 		}
 
@@ -111,18 +116,18 @@ do_cookies_subdomain_policy_test (void)
 {
 	SoupCookieJar *jar;
 	GSList *cookies;
-	SoupURI *uri1;
-	SoupURI *uri2;
-	SoupURI *uri3;
+	GUri *uri1;
+	GUri *uri2;
+	GUri *uri3;
 
 	g_test_bug ("792130");
 
 	/* Only the base domain should be considered when deciding
 	 * whether a cookie is a third-party cookie.
 	 */
-	uri1 = soup_uri_new ("https://www.gnome.org");
-	uri2 = soup_uri_new ("https://foundation.gnome.org");
-	uri3 = soup_uri_new ("https://www.gnome.org.");
+	uri1 = g_uri_parse ("https://www.gnome.org", SOUP_HTTP_URI_FLAGS, NULL);
+	uri2 = g_uri_parse ("https://foundation.gnome.org", SOUP_HTTP_URI_FLAGS, NULL);
+	uri3 = g_uri_parse ("https://www.gnome.org.", SOUP_HTTP_URI_FLAGS, NULL);
 
 	/* We can't check subdomains with a test server running on
 	 * localhost, so we'll just check the cookie jar API itself.
@@ -232,9 +237,9 @@ do_cookies_subdomain_policy_test (void)
 	g_assert_cmpint (g_slist_length (cookies), ==, 7);
 	g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
 
-	soup_uri_free (uri1);
-	soup_uri_free (uri2);
-	soup_uri_free (uri3);
+	g_uri_unref (uri1);
+	g_uri_unref (uri2);
+	g_uri_unref (uri3);
 	g_object_unref (jar);
 }
 
@@ -243,11 +248,11 @@ do_cookies_strict_secure_test (void)
 {
 	SoupCookieJar *jar;
 	GSList *cookies;
-	SoupURI *insecure_uri;
-	SoupURI *secure_uri;
+	GUri *insecure_uri;
+	GUri *secure_uri;
 
-	insecure_uri = soup_uri_new ("http://gnome.org");
-	secure_uri = soup_uri_new ("https://gnome.org");
+	insecure_uri = g_uri_parse ("http://gnome.org", SOUP_HTTP_URI_FLAGS, NULL);
+	secure_uri = g_uri_parse ("https://gnome.org", SOUP_HTTP_URI_FLAGS, NULL);
 	jar = soup_cookie_jar_new ();
 
 	/* Set a cookie from secure origin */
@@ -276,8 +281,8 @@ do_cookies_strict_secure_test (void)
 	g_assert_cmpint (g_slist_length (cookies), ==, 2);
 	g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
 
-	soup_uri_free (insecure_uri);
-	soup_uri_free (secure_uri);
+	g_uri_unref (insecure_uri);
+	g_uri_unref (secure_uri);
 	g_object_unref (jar);
 }
 
@@ -294,27 +299,27 @@ do_cookies_parsing_test (void)
 
 	g_test_bug ("678753");
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC, NULL);
+	session = soup_test_session_new (NULL);
 	soup_session_add_feature_by_type (session, SOUP_TYPE_COOKIE_JAR);
 	jar = SOUP_COOKIE_JAR (soup_session_get_feature (session, SOUP_TYPE_COOKIE_JAR));
 
 	/* "httponly" is case-insensitive, and its value (if any) is ignored */
 	msg = soup_message_new_from_uri ("GET", first_party_uri);
-	soup_message_headers_append (msg->request_headers, "Echo-Set-Cookie",
+	soup_message_headers_append (soup_message_get_request_headers (msg), "Echo-Set-Cookie",
 				     "one=1; httponly; max-age=100");
-	soup_session_send_message (session, msg);
+	soup_test_session_send_message (session, msg);
 	g_object_unref (msg);
 
 	msg = soup_message_new_from_uri ("GET", first_party_uri);
-	soup_message_headers_append (msg->request_headers, "Echo-Set-Cookie",
+	soup_message_headers_append (soup_message_get_request_headers (msg), "Echo-Set-Cookie",
 				     "two=2; HttpOnly; max-age=100; SameSite=Invalid");
-	soup_session_send_message (session, msg);
+	soup_test_session_send_message (session, msg);
 	g_object_unref (msg);
 
 	msg = soup_message_new_from_uri ("GET", first_party_uri);
-	soup_message_headers_append (msg->request_headers, "Echo-Set-Cookie",
+	soup_message_headers_append (soup_message_get_request_headers (msg), "Echo-Set-Cookie",
 				     "three=3; httpONLY=Wednesday; max-age=100; SameSite=Lax");
-	soup_session_send_message (session, msg);
+	soup_test_session_send_message (session, msg);
 	g_object_unref (msg);
 
 	cookies = soup_cookie_jar_get_cookie_list (jar, first_party_uri, TRUE);
@@ -366,18 +371,18 @@ static void
 do_get_cookies_empty_host_test (void)
 {
 	SoupCookieJar *jar;
-	SoupURI *uri;
+	GUri *uri;
 	char *cookies;
 
 	jar = soup_cookie_jar_new ();
-	uri = soup_uri_new ("file:///whatever.html");
+	uri = g_uri_parse ("file:///whatever.html", SOUP_HTTP_URI_FLAGS, NULL);
 
 	cookies = soup_cookie_jar_get_cookies (jar, uri, FALSE);
 
 	g_assert_null (cookies);
 
 	g_object_unref (jar);
-	soup_uri_free (uri);
+	g_uri_unref (uri);
 }
 
 static void
@@ -393,30 +398,117 @@ do_remove_feature_test (void)
 {
 	SoupSession *session;
 	SoupMessage *msg;
-	SoupURI *uri;
+	GUri *uri;
 	GMainLoop *loop;
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION, NULL);
+	session = soup_test_session_new (NULL);
 	soup_session_add_feature_by_type (session, SOUP_TYPE_COOKIE_JAR);
-	uri = soup_uri_new_with_base (first_party_uri, "/index.html");
+	uri = g_uri_parse_relative (first_party_uri, "/index.html", SOUP_HTTP_URI_FLAGS, NULL);
 	msg = soup_message_new_from_uri ("GET", uri);
 	soup_message_set_first_party (msg, first_party_uri);
 
 	loop = g_main_loop_new (NULL, TRUE);
-	soup_session_send_async (session, msg, NULL, (GAsyncReadyCallback)send_callback, loop);
+	soup_session_send_async (session, msg, G_PRIORITY_DEFAULT, NULL,
+				 (GAsyncReadyCallback)send_callback, loop);
 	soup_session_remove_feature_by_type (session, SOUP_TYPE_COOKIE_JAR);
 
 	g_main_loop_run(loop);
 
 	g_main_loop_unref (loop);
 	g_object_unref (msg);
-	soup_uri_free (uri);
+	g_uri_unref (uri);
+}
+
+typedef struct {
+        SoupSession *session;
+        const char *cookie;
+} ThreadTestData;
+
+static void
+task_sync_function (GTask          *task,
+                    GObject        *source,
+                    ThreadTestData *data,
+                    GCancellable   *cancellable)
+{
+        SoupMessage *msg;
+        GBytes *body;
+
+        msg = soup_message_new_from_uri ("GET", first_party_uri);
+        soup_message_headers_append (soup_message_get_request_headers (msg),
+                                     "Echo-Set-Cookie", data->cookie);
+        body = soup_session_send_and_read (data->session, msg, NULL, NULL);
+        g_assert_nonnull (body);
+        g_bytes_unref (body);
+        g_object_unref (msg);
+
+        g_task_return_boolean (task, TRUE);
+}
+
+static void
+task_finished_cb (SoupSession  *session,
+                  GAsyncResult *result,
+                  guint        *finished_count)
+{
+        g_assert_true (g_task_propagate_boolean (G_TASK (result), NULL));
+        g_atomic_int_inc (finished_count);
+}
+
+static gint
+find_cookie (SoupCookie *cookie,
+             const char *name)
+{
+        return g_strcmp0 (soup_cookie_get_name (cookie), name);
+}
+
+static void
+do_cookies_threads_test (void)
+{
+        SoupSession *session;
+        SoupCookieJar *jar;
+        guint n_msgs = 4;
+        guint finished_count = 0;
+        guint i;
+        const char *values[4] = { "one=1", "two=2", "three=3", "four=4" };
+        GSList *cookies;
+
+        session = soup_test_session_new (NULL);
+        soup_session_add_feature_by_type (session, SOUP_TYPE_COOKIE_JAR);
+        jar = SOUP_COOKIE_JAR (soup_session_get_feature (session, SOUP_TYPE_COOKIE_JAR));
+
+        for (i = 0; i < n_msgs; i++) {
+                GTask *task;
+                ThreadTestData *data;
+
+                data = g_new (ThreadTestData, 1);
+                data->session = session;
+                data->cookie = values[i];
+
+                task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_task_data (task, data, g_free);
+                g_task_run_in_thread (task, (GTaskThreadFunc)task_sync_function);
+                g_object_unref (task);
+        }
+
+        while (g_atomic_int_get (&finished_count) != n_msgs)
+                g_main_context_iteration (NULL, TRUE);
+
+        cookies = soup_cookie_jar_get_cookie_list (jar, first_party_uri, TRUE);
+        g_assert_cmpuint (g_slist_length (cookies), ==, 4);
+        g_assert_nonnull (g_slist_find_custom (cookies, "one", (GCompareFunc)find_cookie));
+        g_assert_nonnull (g_slist_find_custom (cookies, "two", (GCompareFunc)find_cookie));
+        g_assert_nonnull (g_slist_find_custom (cookies, "three", (GCompareFunc)find_cookie));
+        g_assert_nonnull (g_slist_find_custom (cookies, "four", (GCompareFunc)find_cookie));
+
+        while (g_main_context_pending (NULL))
+                g_main_context_iteration (NULL, FALSE);
+
+        soup_test_session_abort_unref (session);
 }
 
 int
 main (int argc, char **argv)
 {
-	SoupURI *server_uri;
+	GUri *server_uri;
 	int ret;
 
 	test_init (argc, argv, NULL);
@@ -425,10 +517,10 @@ main (int argc, char **argv)
 	soup_server_add_handler (server, NULL, server_callback, NULL, NULL);
 	server_uri = soup_test_server_get_uri (server, "http", NULL);
 
-	first_party_uri = soup_uri_new (first_party);
-	third_party_uri = soup_uri_new (third_party);
-	soup_uri_set_port (first_party_uri, server_uri->port);
-	soup_uri_set_port (third_party_uri, server_uri->port);
+	first_party_uri = g_uri_build (SOUP_HTTP_URI_FLAGS, "http", NULL, "127.0.0.1",
+                                       g_uri_get_port (server_uri), "/", NULL, NULL);
+        third_party_uri = g_uri_build (SOUP_HTTP_URI_FLAGS, "http", NULL, "localhost",
+                                       g_uri_get_port (server_uri), "/", NULL, NULL);
 
 	g_test_add_func ("/cookies/accept-policy", do_cookies_accept_policy_test);
 	g_test_add_func ("/cookies/accept-policy-subdomains", do_cookies_subdomain_policy_test);
@@ -437,12 +529,13 @@ main (int argc, char **argv)
 	g_test_add_func ("/cookies/get-cookies/empty-host", do_get_cookies_empty_host_test);
 	g_test_add_func ("/cookies/remove-feature", do_remove_feature_test);
 	g_test_add_func ("/cookies/secure-cookies", do_cookies_strict_secure_test);
+        g_test_add_func ("/cookies/threads", do_cookies_threads_test);
 
 	ret = g_test_run ();
 
-	soup_uri_free (first_party_uri);
-	soup_uri_free (third_party_uri);
-	soup_uri_free (server_uri);
+	g_uri_unref (first_party_uri);
+	g_uri_unref (third_party_uri);
+	g_uri_unref (server_uri);
 	soup_test_server_quit_unref (server);
 
 	test_cleanup ();

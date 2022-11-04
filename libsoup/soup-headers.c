@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-headers.c: HTTP message header parsing
  *
@@ -12,7 +12,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "soup-misc.h"
 #include "soup-headers.h"
+#include "soup-message-headers-private.h"
 #include "soup.h"
 
 /**
@@ -23,15 +25,14 @@
  * @dest: #SoupMessageHeaders to store the header values in
  *
  * Parses the headers of an HTTP request or response in @str and
- * stores the results in @dest. Beware that @dest may be modified even
- * on failure.
+ * stores the results in @dest.
+ *
+ * Beware that @dest may be modified even on failure.
  *
  * This is a low-level method; normally you would use
- * soup_headers_parse_request() or soup_headers_parse_response().
+ * [func@headers_parse_request] or [func@headers_parse_response].
  *
- * Return value: success or failure
- *
- * Since: 2.26
+ * Returns: success or failure
  **/
 gboolean
 soup_headers_parse (const char *str, int len, SoupMessageHeaders *dest)
@@ -145,7 +146,7 @@ soup_headers_parse (const char *str, int len, SoupMessageHeaders *dest)
 		for (p = strchr (value, '\r'); p; p = strchr (p, '\r'))
 			*p = ' ';
 
-		soup_message_headers_append (dest, name, value);
+		soup_message_headers_append_untrusted_data (dest, name, value);
         }
 	success = TRUE;
 
@@ -159,20 +160,20 @@ done:
  * @str: the headers (up to, but not including, the trailing blank line)
  * @len: length of @str
  * @req_headers: #SoupMessageHeaders to store the header values in
- * @req_method: (out) (allow-none): if non-%NULL, will be filled in with the
- * request method
- * @req_path: (out) (allow-none): if non-%NULL, will be filled in with the
- * request path
- * @ver: (out) (allow-none): if non-%NULL, will be filled in with the HTTP
- * version
+ * @req_method: (out) (optional): if non-%NULL, will be filled in with the
+ *   request method
+ * @req_path: (out) (optional): if non-%NULL, will be filled in with the
+ *   request path
+ * @ver: (out) (optional): if non-%NULL, will be filled in with the HTTP
+ *   version
  *
  * Parses the headers of an HTTP request in @str and stores the
  * results in @req_method, @req_path, @ver, and @req_headers.
  *
  * Beware that @req_headers may be modified even on failure.
  *
- * Return value: %SOUP_STATUS_OK if the headers could be parsed, or an
- * HTTP error to be returned to the client if they could not be.
+ * Returns: %SOUP_STATUS_OK if the headers could be parsed, or an
+ *   HTTP error to be returned to the client if they could not be.
  **/
 guint
 soup_headers_parse_request (const char          *str, 
@@ -187,7 +188,7 @@ soup_headers_parse_request (const char          *str,
 	unsigned long major_version, minor_version;
 	char *p;
 
-	g_return_val_if_fail (str != NULL, SOUP_STATUS_MALFORMED);
+	g_return_val_if_fail (str != NULL, SOUP_STATUS_BAD_REQUEST);
 
 	/* RFC 2616 4.1 "servers SHOULD ignore any empty line(s)
 	 * received where a Request-Line is expected."
@@ -269,18 +270,19 @@ soup_headers_parse_request (const char          *str,
 /**
  * soup_headers_parse_status_line:
  * @status_line: an HTTP Status-Line
- * @ver: (out) (allow-none): if non-%NULL, will be filled in with the HTTP
- * version
- * @status_code: (out) (allow-none): if non-%NULL, will be filled in with
- * the status code
- * @reason_phrase: (out) (allow-none): if non-%NULL, will be filled in with
- * the reason phrase
+ * @ver: (out) (optional): if non-%NULL, will be filled in with the HTTP
+ *   version
+ * @status_code: (out) (optional): if non-%NULL, will be filled in with
+ *   the status code
+ * @reason_phrase: (out) (optional): if non-%NULL, will be filled in with
+ *   the reason phrase
  *
  * Parses the HTTP Status-Line string in @status_line into @ver,
- * @status_code, and @reason_phrase. @status_line must be terminated by
- * either "\0" or "\r\n".
+ * @status_code, and @reason_phrase.
  *
- * Return value: %TRUE if @status_line was parsed successfully.
+ * @status_line must be terminated by either "\0" or "\r\n".
+ *
+ * Returns: %TRUE if @status_line was parsed successfully.
  **/
 gboolean
 soup_headers_parse_status_line (const char       *status_line,
@@ -346,19 +348,19 @@ soup_headers_parse_status_line (const char       *status_line,
  * @str: the headers (up to, but not including, the trailing blank line)
  * @len: length of @str
  * @headers: #SoupMessageHeaders to store the header values in
- * @ver: (out) (allow-none): if non-%NULL, will be filled in with the HTTP
- * version
- * @status_code: (out) (allow-none): if non-%NULL, will be filled in with
- * the status code
- * @reason_phrase: (out) (allow-none): if non-%NULL, will be filled in with
- * the reason phrase
+ * @ver: (out) (optional): if non-%NULL, will be filled in with the HTTP
+ *   version
+ * @status_code: (out) (optional): if non-%NULL, will be filled in with
+ *   the status code
+ * @reason_phrase: (out) (optional): if non-%NULL, will be filled in with
+ *   the reason phrase
  *
  * Parses the headers of an HTTP response in @str and stores the
  * results in @ver, @status_code, @reason_phrase, and @headers.
  *
  * Beware that @headers may be modified even on failure.
  *
- * Return value: success or failure.
+ * Returns: success or failure.
  **/
 gboolean
 soup_headers_parse_response (const char          *str, 
@@ -478,12 +480,12 @@ parse_list (const char *header, char delim)
  * soup_header_parse_list:
  * @header: a header value
  *
- * Parses a header whose content is described by RFC2616 as
- * "#something", where "something" does not itself contain commas,
- * except as part of quoted-strings.
+ * Parses a header whose content is described by RFC2616 as `#something`.
  *
- * Return value: (transfer full) (element-type utf8): a #GSList of
- * list elements, as allocated strings
+ * "something" does not itself contain commas, except as part of quoted-strings.
+ *
+ * Returns: (transfer full) (element-type utf8): a #GSList of
+ *   list elements, as allocated strings
  **/
 GSList *
 soup_header_parse_list (const char *header)
@@ -515,8 +517,8 @@ sort_by_qval (const void *a, const void *b)
 /**
  * soup_header_parse_quality_list:
  * @header: a header value
- * @unacceptable: (out) (allow-none) (transfer full) (element-type utf8): on
- * return, will contain a list of unacceptable values
+ * @unacceptable: (out) (optional) (transfer full) (element-type utf8): on
+ *   return, will contain a list of unacceptable values
  *
  * Parses a header whose content is a list of items with optional
  * "qvalue"s (eg, Accept, Accept-Charset, Accept-Encoding,
@@ -526,8 +528,8 @@ sort_by_qval (const void *a, const void *b)
  * items with qvalue 0. Either way, those items will be removed from
  * the main list.
  *
- * Return value: (transfer full) (element-type utf8): a #GSList of
- * acceptable values (as allocated strings), highest-qvalue first.
+ * Returns: (transfer full) (element-type utf8): a #GSList of
+ *   acceptable values (as allocated strings), highest-qvalue first.
  **/
 GSList *
 soup_header_parse_quality_list (const char *header, GSList **unacceptable)
@@ -603,8 +605,8 @@ soup_header_parse_quality_list (const char *header, GSList **unacceptable)
 
 /**
  * soup_header_free_list: (skip)
- * @list: a #GSList returned from soup_header_parse_list() or
- * soup_header_parse_quality_list()
+ * @list: a #GSList returned from [func@header_parse_list] or
+ * [func@header_parse_quality_list]
  *
  * Frees @list.
  **/
@@ -617,14 +619,15 @@ soup_header_free_list (GSList *list)
 /**
  * soup_header_contains:
  * @header: An HTTP header suitable for parsing with
- * soup_header_parse_list()
+ *   [func@header_parse_list]
  * @token: a token
  *
  * Parses @header to see if it contains the token @token (matched
- * case-insensitively). Note that this can't be used with lists
- * that have qvalues.
+ * case-insensitively).
  *
- * Return value: whether or not @header contains @token
+ * Note that this can't be used with lists that have qvalues.
+ *
+ * Returns: whether or not @header contains @token
  **/
 gboolean
 soup_header_contains (const char *header, const char *token)
@@ -686,7 +689,10 @@ decode_rfc5987 (char *encoded_string)
 	if (!q)
 		return FALSE;
 
-	decoded = soup_uri_decode (q + 1);
+	decoded = g_uri_unescape_string (q + 1, NULL);
+	if (decoded == NULL)
+		return FALSE;
+
 	if (iso_8859_1) {
 		char *utf8 =  g_convert_with_fallback (decoded, -1, "UTF-8",
 						       "iso-8859-1", "_",
@@ -773,7 +779,7 @@ parse_param_list (const char *header, char delim, gboolean strict)
  * @header: a header value
  *
  * Parses a header which is a comma-delimited list of something like:
- * <literal>token [ "=" ( token | quoted-string ) ]</literal>.
+ * `token [ "=" ( token | quoted-string ) ]`.
  *
  * Tokens that don't have an associated value will still be added to
  * the resulting hash table, but with a %NULL value.
@@ -782,9 +788,9 @@ parse_param_list (const char *header, char delim, gboolean strict)
  * for giving UTF8-encoded filenames in the Content-Disposition
  * header).
  *
- * Return value: (element-type utf8 utf8) (transfer full): a
- * #GHashTable of list elements, which can be freed with
- * soup_header_free_param_list().
+ * Returns: (element-type utf8 utf8) (transfer full): a
+ *   #GHashTable of list elements, which can be freed with
+ *   [func@header_free_param_list].
  **/
 GHashTable *
 soup_header_parse_param_list (const char *header)
@@ -799,7 +805,7 @@ soup_header_parse_param_list (const char *header)
  * @header: a header value
  *
  * Parses a header which is a semicolon-delimited list of something
- * like: <literal>token [ "=" ( token | quoted-string ) ]</literal>.
+ * like: `token [ "=" ( token | quoted-string ) ]`.
  *
  * Tokens that don't have an associated value will still be added to
  * the resulting hash table, but with a %NULL value.
@@ -808,11 +814,9 @@ soup_header_parse_param_list (const char *header)
  * for giving UTF8-encoded filenames in the Content-Disposition
  * header).
  *
- * Return value: (element-type utf8 utf8) (transfer full): a
- * #GHashTable of list elements, which can be freed with
- * soup_header_free_param_list().
- *
- * Since: 2.24
+ * Returns: (element-type utf8 utf8) (transfer full): a
+ *   #GHashTable of list elements, which can be freed with
+ *   [func@header_free_param_list].
  **/
 GHashTable *
 soup_header_parse_semi_param_list (const char *header)
@@ -826,20 +830,19 @@ soup_header_parse_semi_param_list (const char *header)
  * soup_header_parse_param_list_strict:
  * @header: a header value
  *
- * A strict version of soup_header_parse_param_list()
+ * A strict version of [func@header_parse_param_list]
  * that bails out if there are duplicate parameters.
+ *
  * Note that this function will treat RFC5987-encoded
  * parameters as duplicated if an ASCII version is also
  * present. For header fields that might contain
  * RFC5987-encoded parameters, use
- * soup_header_parse_param_list() instead.
+ * [func@header_parse_param_list] instead.
  *
- * Return value: (element-type utf8 utf8) (transfer full) (nullable):
- * a #GHashTable of list elements, which can be freed with
- * soup_header_free_param_list() or %NULL if there are duplicate
- * elements.
- *
- * Since: 2.66
+ * Returns: (element-type utf8 utf8) (transfer full) (nullable):
+ *   a #GHashTable of list elements, which can be freed with
+ *   [func@header_free_param_list] or %NULL if there are duplicate
+ *   elements.
  **/
 GHashTable *
 soup_header_parse_param_list_strict (const char *header)
@@ -853,20 +856,19 @@ soup_header_parse_param_list_strict (const char *header)
  * soup_header_parse_semi_param_list_strict:
  * @header: a header value
  *
- * A strict version of soup_header_parse_semi_param_list()
+ * A strict version of [func@header_parse_semi_param_list]
  * that bails out if there are duplicate parameters.
+ *
  * Note that this function will treat RFC5987-encoded
  * parameters as duplicated if an ASCII version is also
  * present. For header fields that might contain
  * RFC5987-encoded parameters, use
- * soup_header_parse_semi_param_list() instead.
+ * [func@header_parse_semi_param_list] instead.
  *
- * Return value: (element-type utf8 utf8) (transfer full) (nullable):
- * a #GHashTable of list elements, which can be freed with
- * soup_header_free_param_list() or %NULL if there are duplicate
- * elements.
- *
- * Since: 2.66
+ * Returns: (element-type utf8 utf8) (transfer full) (nullable):
+ *   a #GHashTable of list elements, which can be freed with
+ *   [func@header_free_param_list] or %NULL if there are duplicate
+ *   elements.
  **/
 GHashTable *
 soup_header_parse_semi_param_list_strict (const char *header)
@@ -878,8 +880,8 @@ soup_header_parse_semi_param_list_strict (const char *header)
 
 /**
  * soup_header_free_param_list:
- * @param_list: (element-type utf8 utf8): a #GHashTable returned from soup_header_parse_param_list()
- * or soup_header_parse_semi_param_list()
+ * @param_list: (element-type utf8 utf8): a #GHashTable returned from
+ *   [func@header_parse_param_list] or [func@header_parse_semi_param_list]
  *
  * Frees @param_list.
  **/
@@ -900,7 +902,7 @@ append_param_rfc5987 (GString    *string,
 
 	g_string_append (string, name);
 	g_string_append (string, "*=UTF-8''");
-	encoded = soup_uri_encode (value, " *'%()<>@,;:\\\"/[]?=");
+	encoded = g_uri_escape_string (value, "*'%()<>@,;:\\\"/[]?=", FALSE);
 	g_string_append (string, encoded);
 	g_free (encoded);
 }
@@ -962,13 +964,11 @@ append_param_internal (GString    *string,
  * @name: a parameter name
  * @value: a parameter value
  *
- * Appends something like <literal>@name="@value"</literal> to
+ * Appends something like `name="value"` to
  * @string, taking care to escape any quotes or backslashes in @value.
  *
  * If @value is (non-ASCII) UTF-8, this will instead use RFC 5987
- * encoding, just like soup_header_g_string_append_param().
- *
- * Since: 2.30
+ * encoding, just like [func@header_g_string_append_param].
  **/
 void
 soup_header_g_string_append_param_quoted (GString    *string,
@@ -988,9 +988,8 @@ soup_header_g_string_append_param_quoted (GString    *string,
  * @name: a parameter name
  * @value: a parameter value, or %NULL
  *
- * Appends something like <literal>@name=@value</literal> to @string,
- * taking care to quote @value if needed, and if so, to escape any
- * quotes or backslashes in @value.
+ * Appends something like `name=value` to @string, taking care to quote @value
+ * if needed, and if so, to escape any quotes or backslashes in @value.
  *
  * Alternatively, if @value is a non-ASCII UTF-8 string, it will be
  * appended using RFC5987 syntax. Although in theory this is supposed
@@ -999,8 +998,6 @@ soup_header_g_string_append_param_quoted (GString    *string,
  * "filename" parameter.
  *
  * If @value is %NULL, this will just append @name to @string.
- *
- * Since: 2.26
  **/
 void
 soup_header_g_string_append_param (GString    *string,

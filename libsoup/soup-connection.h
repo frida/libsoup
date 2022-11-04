@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2000-2003, Ximian, Inc.
  */
@@ -6,79 +6,86 @@
 #ifndef __SOUP_CONNECTION_H__
 #define __SOUP_CONNECTION_H__ 1
 
-#include "soup-types.h"
+#include "soup-types-private.h"
 #include "soup-message-private.h"
 #include "soup-misc.h"
 
 G_BEGIN_DECLS
 
-#define SOUP_TYPE_CONNECTION            (soup_connection_get_type ())
-#define SOUP_CONNECTION(obj)            (G_TYPE_CHECK_INSTANCE_CAST ((obj), SOUP_TYPE_CONNECTION, SoupConnection))
-#define SOUP_CONNECTION_CLASS(klass)    (G_TYPE_CHECK_CLASS_CAST ((klass), SOUP_TYPE_CONNECTION, SoupConnectionClass))
-#define SOUP_IS_CONNECTION(obj)         (G_TYPE_CHECK_INSTANCE_TYPE ((obj), SOUP_TYPE_CONNECTION))
-#define SOUP_IS_CONNECTION_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((obj), SOUP_TYPE_CONNECTION))
-#define SOUP_CONNECTION_GET_CLASS(obj)  (G_TYPE_INSTANCE_GET_CLASS ((obj), SOUP_TYPE_CONNECTION, SoupConnectionClass))
+#define SOUP_TYPE_CONNECTION (soup_connection_get_type ())
+G_DECLARE_FINAL_TYPE (SoupConnection, soup_connection, SOUP, CONNECTION, GObject)
 
-struct _SoupConnection {
-	GObject parent;
-
-};
-
-typedef struct {
-	GObjectClass parent_class;
-
-	/* signals */
-	void (*disconnected)    (SoupConnection *);
-
-} SoupConnectionClass;
-
-GType soup_connection_get_type (void);
-
-
-#define SOUP_CONNECTION_REMOTE_URI        "remote-uri"
-#define SOUP_CONNECTION_SOCKET_PROPERTIES "socket-properties"
-#define SOUP_CONNECTION_STATE             "state"
-#define SOUP_CONNECTION_SSL               "ssl"
+typedef enum {
+	SOUP_CONNECTION_NEW,
+	SOUP_CONNECTION_CONNECTING,
+	SOUP_CONNECTION_IDLE,
+	SOUP_CONNECTION_IN_USE,
+	SOUP_CONNECTION_DISCONNECTED
+} SoupConnectionState;
 
 void            soup_connection_connect_async    (SoupConnection       *conn,
+						  int                   io_priority,
 						  GCancellable         *cancellable,
 						  GAsyncReadyCallback   callback,
 						  gpointer              user_data);
 gboolean        soup_connection_connect_finish   (SoupConnection       *conn,
 						  GAsyncResult         *result,
 						  GError              **error);
-gboolean        soup_connection_connect_sync     (SoupConnection       *conn,
+gboolean        soup_connection_connect          (SoupConnection       *conn,
 						  GCancellable         *cancellable,
 						  GError              **error);
-gboolean        soup_connection_start_ssl_sync   (SoupConnection       *conn,
-						  GCancellable         *cancellable,
-						  GError              **error);
-void            soup_connection_start_ssl_async  (SoupConnection       *conn,
-						  GCancellable         *cancellable,
-						  GAsyncReadyCallback   callback,
-						  gpointer              user_data);
-gboolean        soup_connection_start_ssl_finish (SoupConnection       *conn,
-						  GAsyncResult         *result,
-						  GError              **error);
-
+void            soup_connection_tunnel_handshake_async  (SoupConnection     *conn,
+							 int                 io_priority,
+							 GCancellable       *cancellable,
+							 GAsyncReadyCallback callback,
+							 gpointer            user_data);
+gboolean        soup_connection_tunnel_handshake_finish (SoupConnection *conn,
+							 GAsyncResult   *result,
+							 GError        **error);
+gboolean        soup_connection_tunnel_handshake        (SoupConnection *conn,
+							 GCancellable   *cancellable,
+							 GError        **error);
 void            soup_connection_disconnect     (SoupConnection   *conn);
 
-SoupSocket     *soup_connection_get_socket     (SoupConnection   *conn);
-SoupURI        *soup_connection_get_remote_uri (SoupConnection   *conn);
-SoupURI        *soup_connection_get_proxy_uri  (SoupConnection   *conn);
+GSocket        *soup_connection_get_socket     (SoupConnection   *conn);
+GIOStream      *soup_connection_get_iostream   (SoupConnection   *conn);
+GIOStream      *soup_connection_steal_iostream (SoupConnection   *conn);
+GUri           *soup_connection_get_remote_uri (SoupConnection   *conn);
+GUri           *soup_connection_get_proxy_uri  (SoupConnection   *conn);
 gboolean        soup_connection_is_via_proxy   (SoupConnection   *conn);
 gboolean        soup_connection_is_tunnelled   (SoupConnection   *conn);
 
 SoupConnectionState soup_connection_get_state  (SoupConnection   *conn);
-void                soup_connection_set_state  (SoupConnection   *conn,
-						SoupConnectionState state);
+void            soup_connection_set_in_use     (SoupConnection   *conn,
+                                                gboolean          in_use);
+gboolean        soup_connection_is_idle_open   (SoupConnection   *conn);
 
-gboolean        soup_connection_get_ever_used  (SoupConnection   *conn);
+SoupClientMessageIO *soup_connection_setup_message_io    (SoupConnection *conn,
+                                                          SoupMessage    *msg);
 
-void            soup_connection_send_request   (SoupConnection          *conn,
-						SoupMessageQueueItem    *item,
-						SoupMessageCompletionFn  completion_cb,
-						gpointer                 user_data);
+GTlsCertificate     *soup_connection_get_tls_certificate                       (SoupConnection  *conn);
+GTlsCertificateFlags soup_connection_get_tls_certificate_errors                (SoupConnection  *conn);
+GTlsProtocolVersion  soup_connection_get_tls_protocol_version                  (SoupConnection  *conn);
+char                *soup_connection_get_tls_ciphersuite_name                  (SoupConnection  *conn);
+void                 soup_connection_request_tls_certificate                   (SoupConnection  *conn,
+                                                                                GTlsConnection  *connection,
+                                                                                GTask           *task);
+void                 soup_connection_complete_tls_certificate_request          (SoupConnection  *conn,
+                                                                                GTlsCertificate *certificate,
+                                                                                GTask           *task);
+void                 soup_connection_set_tls_client_certificate                (SoupConnection  *conn,
+                                                                                GTlsCertificate *certificate);
+void                 soup_connection_request_tls_certificate_password          (SoupConnection  *conn,
+                                                                                GTlsPassword    *password,
+                                                                                GTask           *task);
+void                 soup_connection_complete_tls_certificate_password_request (SoupConnection  *conn,
+                                                                                GTask           *task);
+
+guint64              soup_connection_get_id                     (SoupConnection *conn);
+GSocketAddress      *soup_connection_get_remote_address         (SoupConnection *conn);
+SoupHTTPVersion      soup_connection_get_negotiated_protocol    (SoupConnection *conn);
+gboolean             soup_connection_is_reusable                (SoupConnection *conn);
+GThread             *soup_connection_get_owner                  (SoupConnection *conn);
 
 G_END_DECLS
 

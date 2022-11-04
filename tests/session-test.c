@@ -1,11 +1,14 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 
 #include "test-utils.h"
+#include "soup-session-private.h"
 
+static GUri *base_uri;
 static gboolean server_processed_message;
 static gboolean timeout;
 static GMainLoop *loop;
 static SoupMessagePriority expected_priorities[3];
+static GBytes *index_bytes;
 
 static gboolean
 timeout_cb (gpointer user_data)
@@ -18,10 +21,9 @@ timeout_cb (gpointer user_data)
 
 static void
 server_handler (SoupServer        *server,
-		SoupMessage       *msg, 
+		SoupServerMessage *msg,
 		const char        *path,
 		GHashTable        *query,
-		SoupClientContext *client,
 		gpointer           user_data)
 {
 	if (!strcmp (path, "/request-timeout")) {
@@ -32,52 +34,72 @@ server_handler (SoupServer        *server,
 		g_source_set_callback (timer, timeout_cb, &timeout, NULL);
 		g_source_attach (timer, context);
 		g_source_unref (timer);
+	} else if (!strcmp (path, "/index.txt")) {
+		soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
+		soup_server_message_set_response (msg, "text/plain",
+						  SOUP_MEMORY_STATIC,
+						  g_bytes_get_data (index_bytes, NULL),
+						  g_bytes_get_size (index_bytes));
+		return;
 	} else
 		server_processed_message = TRUE;
 
-	soup_message_set_status (msg, SOUP_STATUS_OK);
-	soup_message_set_response (msg, "text/plain",
-				   SOUP_MEMORY_STATIC,
-				   "ok\r\n", 4);
+	soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
+	soup_server_message_set_response (msg, "text/plain",
+					  SOUP_MEMORY_STATIC,
+					  "ok\r\n", 4);
 }
 
 static void
-finished_cb (SoupSession *session, SoupMessage *msg, gpointer user_data)
+finished_cb (SoupMessage *msg,
+	     gboolean    *finished)
 {
-	gboolean *finished = user_data;
-
 	*finished = TRUE;
 }
 
 static void
-cancel_message_cb (SoupMessage *msg, gpointer session)
+cancel_message_cb (SoupMessage  *msg,
+		   GCancellable *cancellable)
 {
-	soup_session_cancel_message (session, msg, SOUP_STATUS_CANCELLED);
+	g_cancellable_cancel (cancellable);
+}
+
+static void
+cancel_message_send_done (SoupSession  *session,
+			  GAsyncResult *result,
+			  GError      **error)
+{
+	g_assert_null (soup_session_send_finish (session, result, error));
 	g_main_loop_quit (loop);
 }
 
 static void
-do_test_for_session (SoupSession *session, SoupURI *uri,
+do_test_for_session (SoupSession *session,
 		     gboolean queue_is_async,
-		     gboolean send_is_blocking,
-		     gboolean cancel_is_immediate)
+		     gboolean send_is_blocking)
 {
 	SoupMessage *msg;
 	gboolean finished, local_timeout;
 	guint timeout_id;
-	SoupURI *timeout_uri;
+	GUri *timeout_uri;
+	GBytes *body;
+	GCancellable *cancellable;
+	GError *error = NULL;
 
 	debug_printf (1, "  queue_message\n");
 	debug_printf (2, "    requesting timeout\n");
-	timeout_uri = soup_uri_new_with_base (uri, "/request-timeout");
+	timeout_uri = g_uri_parse_relative (base_uri, "/request-timeout", SOUP_HTTP_URI_FLAGS, NULL);
 	msg = soup_message_new_from_uri ("GET", timeout_uri);
-	soup_uri_free (timeout_uri);
-	soup_session_send_message (session, msg);
-	g_object_unref (msg);
+	body = soup_session_send_and_read (session, msg, NULL, NULL);
+	g_bytes_unref (body);
+	g_uri_unref (timeout_uri);
 
-	msg = soup_message_new_from_uri ("GET", uri);
+	msg = soup_message_new_from_uri ("GET", base_uri);
 	server_processed_message = timeout = finished = FALSE;
-	soup_session_queue_message (session, msg, finished_cb, &finished);
+	g_signal_connect (msg, "finished",
+			  G_CALLBACK (finished_cb), &finished);
+	soup_session_send_async (session, msg, G_PRIORITY_DEFAULT, NULL, NULL, NULL);
+	g_object_unref (msg);
 	while (!timeout)
 		g_usleep (100);
 	debug_printf (2, "    got timeout\n");
@@ -97,10 +119,11 @@ do_test_for_session (SoupSession *session, SoupURI *uri,
 	}
 
 	debug_printf (1, "  send_message\n");
-	msg = soup_message_new_from_uri ("GET", uri);
+	msg = soup_message_new_from_uri ("GET", base_uri);
 	server_processed_message = local_timeout = FALSE;
 	timeout_id = g_idle_add_full (G_PRIORITY_HIGH, timeout_cb, &local_timeout, NULL);
-	soup_session_send_message (session, msg);
+	body = soup_session_send_and_read (session, msg, NULL, NULL);
+        g_bytes_unref (body);
 	g_object_unref (msg);
 
 	g_assert_true (server_processed_message);
@@ -120,69 +143,39 @@ do_test_for_session (SoupSession *session, SoupURI *uri,
 		return;
 
 	debug_printf (1, "  cancel_message\n");
-	msg = soup_message_new_from_uri ("GET", uri);
-	g_object_ref (msg);
-	finished = FALSE;
-	soup_session_queue_message (session, msg, finished_cb, &finished);
+	msg = soup_message_new_from_uri ("GET", base_uri);
+	cancellable = g_cancellable_new ();
+	soup_session_send_async (session, msg, G_PRIORITY_DEFAULT, cancellable,
+				 (GAsyncReadyCallback)cancel_message_send_done,
+				 &error);
 	g_signal_connect (msg, "wrote-headers",
-			  G_CALLBACK (cancel_message_cb), session);
+			  G_CALLBACK (cancel_message_cb), cancellable);
 
 	loop = g_main_loop_new (NULL, FALSE);
 	g_main_loop_run (loop);
 
-	if (cancel_is_immediate)
-		g_assert_true (finished);
-	else
-		g_assert_false (finished);
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
 
-	if (!finished) {
-		debug_printf (2, "    waiting for finished\n");
-		while (!finished)
-			g_main_context_iteration (NULL, TRUE);
-	}
 	g_main_loop_unref (loop);
-
-	soup_test_assert_message_status (msg, SOUP_STATUS_CANCELLED);
+	g_clear_error (&error);
+	g_object_unref (cancellable);
 	g_object_unref (msg);
 }
 
 static void
-do_plain_tests (gconstpointer data)
+do_plain_tests (void)
 {
-	SoupURI *uri = (SoupURI *)data;
 	SoupSession *session;
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION, NULL);
-	do_test_for_session (session, uri, TRUE, TRUE, FALSE);
+	session = soup_test_session_new (NULL);
+	do_test_for_session (session, TRUE, TRUE);
 	soup_test_session_abort_unref (session);
 }
 
 static void
-do_async_tests (gconstpointer data)
+priority_test_finished_cb (SoupMessage *msg,
+			   guint       *finished_count)
 {
-	SoupURI *uri = (SoupURI *)data;
-	SoupSession *session;
-
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC, NULL);
-	do_test_for_session (session, uri, TRUE, FALSE, TRUE);
-	soup_test_session_abort_unref (session);
-}
-
-static void
-do_sync_tests (gconstpointer data)
-{
-	SoupURI *uri = (SoupURI *)data;
-	SoupSession *session;
-
-	session = soup_test_session_new (SOUP_TYPE_SESSION_SYNC, NULL);
-	do_test_for_session (session, uri, FALSE, TRUE, FALSE);
-	soup_test_session_abort_unref (session);
-}
-
-static void
-priority_test_finished_cb (SoupSession *session, SoupMessage *msg, gpointer user_data)
-{
-	guint *finished_count = user_data;
 	SoupMessagePriority priority = soup_message_get_priority (msg);
 
 	debug_printf (1, "  received message %d with priority %d\n",
@@ -196,9 +189,8 @@ priority_test_finished_cb (SoupSession *session, SoupMessage *msg, gpointer user
 }
 
 static void
-do_priority_tests (gconstpointer data)
+do_priority_tests (void)
 {
-	SoupURI *uri = (SoupURI *)data;
 	SoupSession *session;
 	int i, finished_count = 0;
 	SoupMessagePriority priorities[] =
@@ -208,25 +200,27 @@ do_priority_tests (gconstpointer data)
 
 	g_test_bug ("696277");
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC, NULL);
-	g_object_set (session, "max-conns", 1, NULL);
+	session = soup_test_session_new ("max-conns", 1, NULL);
 
 	expected_priorities[0] = SOUP_MESSAGE_PRIORITY_HIGH;
 	expected_priorities[1] = SOUP_MESSAGE_PRIORITY_NORMAL;
 	expected_priorities[2] = SOUP_MESSAGE_PRIORITY_LOW;
 
 	for (i = 0; i < 3; i++) {
-		SoupURI *msg_uri;
+		GUri *msg_uri;
 		SoupMessage *msg;
 		char buf[5];
 
 		g_snprintf (buf, sizeof (buf), "%d", i);
-		msg_uri = soup_uri_new_with_base (uri, buf);
+		msg_uri = g_uri_parse_relative (base_uri, buf, SOUP_HTTP_URI_FLAGS, NULL);
 		msg = soup_message_new_from_uri ("GET", msg_uri);
-		soup_uri_free (msg_uri);
+		g_uri_unref (msg_uri);
 
 		soup_message_set_priority (msg, priorities[i]);
-		soup_session_queue_message (session, msg, priority_test_finished_cb, &finished_count);
+		g_signal_connect (msg, "finished",
+				  G_CALLBACK (priority_test_finished_cb), &finished_count);
+		soup_session_send_async (session, msg, G_PRIORITY_DEFAULT, NULL, NULL, NULL);
+		g_object_unref (msg);
 	}
 
 	debug_printf (2, "    waiting for finished\n");
@@ -237,18 +231,57 @@ do_priority_tests (gconstpointer data)
 }
 
 static void
+do_priority_change_test (void)
+{
+        SoupSession *session;
+        SoupMessage *msgs[3];
+        int i, finished_count = 0;
+        SoupMessagePriority priorities[] =
+                { SOUP_MESSAGE_PRIORITY_LOW,
+                  SOUP_MESSAGE_PRIORITY_HIGH,
+                  SOUP_MESSAGE_PRIORITY_NORMAL };
+
+        session = soup_test_session_new ("max-conns", 1, NULL);
+
+        expected_priorities[0] = SOUP_MESSAGE_PRIORITY_HIGH;
+        expected_priorities[1] = SOUP_MESSAGE_PRIORITY_LOW;
+        expected_priorities[2] = SOUP_MESSAGE_PRIORITY_VERY_LOW;
+
+        for (i = 0; i < 3; i++) {
+                GUri *msg_uri;
+                char buf[5];
+
+                g_snprintf (buf, sizeof (buf), "%d", i);
+                msg_uri = g_uri_parse_relative (base_uri, buf, SOUP_HTTP_URI_FLAGS, NULL);
+                msgs[i] = soup_message_new_from_uri ("GET", msg_uri);
+                g_uri_unref (msg_uri);
+
+                soup_message_set_priority (msgs[i], priorities[i]);
+                g_signal_connect (msgs[i], "finished",
+                                  G_CALLBACK (priority_test_finished_cb), &finished_count);
+                soup_session_send_async (session, msgs[i], G_PRIORITY_DEFAULT, NULL, NULL, NULL);
+        }
+
+        soup_message_set_priority (msgs[2], SOUP_MESSAGE_PRIORITY_VERY_LOW);
+
+        debug_printf (2, "    waiting for finished\n");
+        while (finished_count != 3)
+                g_main_context_iteration (NULL, TRUE);
+
+        for (i = 0; i < 3; i++)
+                g_object_unref (msgs[i]);
+
+        soup_test_session_abort_unref (session);
+}
+
+static void
 test_session_properties (const char *name,
 			 SoupSession *session,
 			 GProxyResolver *expected_proxy_resolver,
 			 GTlsDatabase *expected_tls_database)
 {
-	GProxyResolver *proxy_resolver = NULL;
-	GTlsDatabase *tlsdb = NULL;
-
-	g_object_get (G_OBJECT (session),
-		      SOUP_SESSION_PROXY_RESOLVER, &proxy_resolver,
-		      SOUP_SESSION_TLS_DATABASE, &tlsdb,
-		      NULL);
+	GProxyResolver *proxy_resolver = soup_session_get_proxy_resolver (session);
+	GTlsDatabase *tlsdb = soup_session_get_tls_database (session);
 
 	soup_test_assert (proxy_resolver == expected_proxy_resolver,
 			  "%s has %s proxy resolver",
@@ -256,9 +289,6 @@ test_session_properties (const char *name,
 	soup_test_assert (tlsdb == expected_tls_database,
 			  "%s has %s TLS database",
 			  name, tlsdb ? (expected_tls_database ? "wrong" : "a") : "no");
-
-	g_clear_object (&proxy_resolver);
-	g_clear_object (&tlsdb);
 }
 
 static void
@@ -267,7 +297,6 @@ do_property_tests (void)
 	SoupSession *session;
 	GProxyResolver *proxy_resolver, *default_proxy_resolver;
 	GTlsDatabase *tlsdb, *default_tlsdb;
-	SoupURI *uri;
 
 	g_test_bug ("708696");
 
@@ -283,7 +312,7 @@ do_property_tests (void)
 	g_object_unref (session);
 
 	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_PROXY_RESOLVER, NULL,
+				"proxy-resolver", NULL,
 				NULL);
 	test_session_properties ("Session with NULL :proxy-resolver", session,
 				 NULL, default_tlsdb);
@@ -291,7 +320,7 @@ do_property_tests (void)
 
 	proxy_resolver = g_simple_proxy_resolver_new (NULL, NULL);
 	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_PROXY_RESOLVER, proxy_resolver,
+				"proxy-resolver", proxy_resolver,
 				NULL);
 	test_session_properties ("Session with non-NULL :proxy-resolver", session,
 				 proxy_resolver, default_tlsdb);
@@ -299,37 +328,7 @@ do_property_tests (void)
 	g_object_unref (session);
 
 	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_PROXY_URI, NULL,
-				NULL);
-	test_session_properties ("Session with NULL :proxy-uri", session,
-				 NULL, default_tlsdb);
-	g_object_unref (session);
-
-	uri = soup_uri_new ("http://example.com/");
-	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_PROXY_URI, uri,
-				NULL);
-	g_object_get (G_OBJECT (session),
-		      SOUP_SESSION_PROXY_RESOLVER, &proxy_resolver,
-		      NULL);
-	test_session_properties ("Session with non-NULL :proxy-uri", session,
-				 proxy_resolver, default_tlsdb);
-	g_assert_cmpstr (G_OBJECT_TYPE_NAME (proxy_resolver), ==, "GSimpleProxyResolver");
-	g_object_unref (proxy_resolver);
-	g_object_unref (session);
-	soup_uri_free (uri);
-
-	G_GNUC_BEGIN_IGNORE_DEPRECATIONS;
-	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_REMOVE_FEATURE_BY_TYPE, SOUP_TYPE_PROXY_URI_RESOLVER,
-				NULL);
-	test_session_properties ("Session with removed proxy resolver feature", session,
-				 NULL, default_tlsdb);
-	g_object_unref (session);
-	G_GNUC_END_IGNORE_DEPRECATIONS;
-
-	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_TLS_DATABASE, NULL,
+				"tls-database", NULL,
 				NULL);
 	test_session_properties ("Session with NULL :tls-database", session,
 				 default_proxy_resolver, NULL);
@@ -340,34 +339,21 @@ do_property_tests (void)
 	 */
 	if (tls_available) {
 		GError *error = NULL;
+                char *db_path;
 
-		tlsdb = g_tls_file_database_new (g_test_get_filename (G_TEST_DIST,
-								      "test-cert.pem",
-								      NULL), &error);
+                db_path = soup_test_build_filename_abs (G_TEST_DIST, "test-cert.pem", NULL);
+		tlsdb = g_tls_file_database_new (db_path, &error);
 		g_assert_no_error (error);
+                g_free (db_path);
 
 		session = g_object_new (SOUP_TYPE_SESSION,
-					SOUP_SESSION_TLS_DATABASE, tlsdb,
+					"tls-database", tlsdb,
 					NULL);
 		test_session_properties ("Session with non-NULL :tls-database", session,
 					 default_proxy_resolver, tlsdb);
 		g_object_unref (tlsdb);
 		g_object_unref (session);
 	}
-
-	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, FALSE,
-				NULL);
-	test_session_properties ("Session with :ssl-use-system-ca-file FALSE", session,
-				 default_proxy_resolver, NULL);
-	g_object_unref (session);
-
-	session = g_object_new (SOUP_TYPE_SESSION,
-				SOUP_SESSION_SSL_USE_SYSTEM_CA_FILE, TRUE,
-				NULL);
-	test_session_properties ("Session with :ssl-use-system-ca-file TRUE", session,
-				 default_proxy_resolver, default_tlsdb);
-	g_object_unref (session);
 }
 
 static gint
@@ -384,7 +370,7 @@ do_features_test (void)
 	GSList *features;
 	SoupSessionFeature *feature;
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC, NULL);
+	session = soup_test_session_new (NULL);
 
 	features = soup_session_get_features (session, SOUP_TYPE_SESSION_FEATURE);
 	/* SoupAuthManager is always added */
@@ -398,14 +384,83 @@ do_features_test (void)
 	g_assert_null (soup_session_get_feature (session, SOUP_TYPE_AUTH_MANAGER));
 	g_slist_free (features);
 
-	/* HTTP, File and Data requests are always added */
-	g_assert_true (soup_session_has_feature (session, SOUP_TYPE_REQUEST_HTTP));
-	g_assert_true (soup_session_has_feature (session, SOUP_TYPE_REQUEST_FILE));
-	g_assert_true (soup_session_has_feature (session, SOUP_TYPE_REQUEST_DATA));
-	soup_session_remove_feature_by_type (session, SOUP_TYPE_REQUEST_FILE);
-	g_assert_false (soup_session_has_feature (session, SOUP_TYPE_REQUEST_FILE));
-	g_assert_true (soup_session_has_feature (session, SOUP_TYPE_REQUEST_HTTP));
-	g_assert_true (soup_session_has_feature (session, SOUP_TYPE_REQUEST_DATA));
+	soup_test_session_abort_unref (session);
+}
+
+static void
+queue_order_test_message_finished (SoupMessage *msg,
+				   guint       *finished_count)
+{
+	(*finished_count)++;
+}
+
+static void
+queue_order_test_message_network_event (SoupMessage       *msg,
+					GSocketClientEvent event,
+					GIOStream         *connection,
+					SoupMessage      **queue)
+{
+	int i;
+
+	if (event != G_SOCKET_CLIENT_RESOLVING)
+                return;
+
+	for (i = 0; i < 3; i++) {
+		if (queue[i] == NULL) {
+			queue[i] = msg;
+			return;
+		}
+	}
+	g_assert_not_reached ();
+}
+
+static void
+do_queue_order_test (void)
+{
+	SoupSession *session;
+	SoupMessage *msg1, *msg2, *msg3;
+	guint finished_count = 0;
+	SoupMessage *queue[3] = { NULL, NULL, NULL };
+
+	session = soup_test_session_new (NULL);
+
+	msg1 = soup_message_new_from_uri ("GET", base_uri);
+	g_signal_connect (msg1, "network-event",
+			  G_CALLBACK (queue_order_test_message_network_event),
+			  queue);
+	g_signal_connect (msg1, "finished",
+			  G_CALLBACK (queue_order_test_message_finished),
+			  &finished_count);
+	msg2 = soup_message_new_from_uri ("GET", base_uri);
+	g_signal_connect (msg2, "network-event",
+			  G_CALLBACK (queue_order_test_message_network_event),
+			  queue);
+	g_signal_connect (msg2, "finished",
+			  G_CALLBACK (queue_order_test_message_finished),
+			  &finished_count);
+	msg3 = soup_message_new_from_uri ("GET", base_uri);
+	g_signal_connect (msg3, "network-event",
+			  G_CALLBACK (queue_order_test_message_network_event),
+			  queue);
+	g_signal_connect (msg3, "finished",
+			  G_CALLBACK (queue_order_test_message_finished),
+			  &finished_count);
+
+	soup_session_send_async (session, msg1, G_PRIORITY_DEFAULT, NULL, NULL, NULL);
+	soup_session_send_async (session, msg2, G_PRIORITY_DEFAULT, NULL, NULL, NULL);
+	soup_session_send_async (session, msg3, G_PRIORITY_DEFAULT, NULL, NULL, NULL);
+	while (queue[2] == NULL)
+		g_main_context_iteration (NULL, TRUE);
+
+	g_assert_true (queue[0] == msg1);
+	g_assert_true (queue[1] == msg2);
+	g_assert_true (queue[2] == msg3);
+	g_object_unref (msg1);
+	g_object_unref (msg2);
+	g_object_unref (msg3);
+
+	while (finished_count != 3)
+		g_main_context_iteration (NULL, TRUE);
 
 	soup_test_session_abort_unref (session);
 }
@@ -414,25 +469,26 @@ int
 main (int argc, char **argv)
 {
 	SoupServer *server;
-	SoupURI *uri;
 	int ret;
 
 	test_init (argc, argv, NULL);
 
-	server = soup_test_server_new (TRUE);
+	server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
 	soup_server_add_handler (server, NULL, server_handler, NULL, NULL);
-	uri = soup_test_server_get_uri (server, "http", NULL);
+	base_uri = soup_test_server_get_uri (server, "http", NULL);
+	index_bytes = soup_test_get_index ();
+ 	soup_test_register_resources ();
 
-	g_test_add_data_func ("/session/SoupSession", uri, do_plain_tests);
-	g_test_add_data_func ("/session/SoupSessionAsync", uri, do_async_tests);
-	g_test_add_data_func ("/session/SoupSessionSync", uri, do_sync_tests);
-	g_test_add_data_func ("/session/priority", uri, do_priority_tests);
+	g_test_add_func ("/session/SoupSession", do_plain_tests);
+	g_test_add_func ("/session/priority", do_priority_tests);
+        g_test_add_func ("/session/priority-change", do_priority_change_test);
 	g_test_add_func ("/session/property", do_property_tests);
 	g_test_add_func ("/session/features", do_features_test);
+	g_test_add_func ("/session/queue-order", do_queue_order_test);
 
 	ret = g_test_run ();
 
-	soup_uri_free (uri);
+	g_uri_unref (base_uri);
 	soup_test_server_quit_unref (server);
 
 	test_cleanup ();

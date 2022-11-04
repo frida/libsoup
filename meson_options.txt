@@ -34,12 +34,6 @@ option('tls_check',
   description : 'Enable TLS support through glib-networking. If you are building a package, you can disable this to allow building libsoup anyway (since glib-networking is not actually required at compile time), but you should be sure to add a runtime dependency on it.'
 )
 
-option('gnome',
-  type : 'boolean',
-  value : true,
-  description : 'Build libsoup with GNOME support'
-)
-
 option('introspection',
   type : 'feature',
   value : 'auto',
@@ -53,22 +47,28 @@ option('vapi',
   description : 'Build Vala bindings'
 )
 
-option('gtk_doc',
-  type: 'boolean',
-  value: false,
+option('docs',
+  type: 'feature',
+  value: 'auto',
   description: 'Enable generating the API reference'
 )
 
-option('examples',
-  type : 'feature',
-  value : 'auto',
-  description : 'Build examples'
+option('doc_tests',
+  type: 'boolean',
+  value: false,
+  description: 'Enable strict validation of API docs'
 )
 
 option('tests',
   type: 'boolean',
   value: true,
   description: 'Enable unit tests compilation'
+)
+
+option('autobahn',
+  type: 'feature',
+  value: 'auto',
+  description: 'Enable autobahn test suite'
 )
 
 option('installed_tests',
@@ -81,4 +81,16 @@ option('sysprof',
   type: 'feature',
   value: 'auto',
   description: 'enable sysprof-capture support for profiling'
+)
+
+option('fuzzing',
+  type: 'feature',
+  value: 'disabled',
+  description: 'enable fuzzing support'
+)
+
+option('pkcs11_tests',
+  type: 'feature',
+  value: 'auto',
+  description: 'enable PKCS #11 tests depending on gnutls'
 )

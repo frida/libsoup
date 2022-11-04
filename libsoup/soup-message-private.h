@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2000-2003, Ximian, Inc.
  */
@@ -6,55 +6,17 @@
 #ifndef __SOUP_MESSAGE_PRIVATE_H__
 #define __SOUP_MESSAGE_PRIVATE_H__ 1
 
+#include "soup-filter-input-stream.h"
 #include "soup-message.h"
-#include "soup-auth.h"
-#include "soup-content-processor.h"
-#include "soup-content-sniffer.h"
+#include "soup-client-message-io.h"
+#include "auth/soup-auth.h"
+#include "content-sniffer/soup-content-sniffer.h"
 #include "soup-session.h"
 
-typedef struct {
-	gpointer           io_data;
-
-	SoupChunkAllocator chunk_allocator;
-	gpointer           chunk_allocator_data;
-	GDestroyNotify     chunk_allocator_dnotify;
-
-	guint              msg_flags;
-	gboolean           server_side;
-
-	SoupContentSniffer *sniffer;
-	gsize              bytes_for_sniffing;
-
-	SoupHTTPVersion    http_version, orig_http_version;
-
-	SoupURI           *uri;
-	SoupAddress       *addr;
-
-	SoupAuth          *auth, *proxy_auth;
-	SoupConnection    *connection;
-
-	GHashTable        *disabled_features;
-
-	SoupURI           *first_party;
-	SoupURI           *site_for_cookies;
-
-	GTlsCertificate      *tls_certificate;
-	GTlsCertificateFlags  tls_errors;
-
-	SoupRequest       *request;
-
-	SoupMessagePriority priority;
-
-	gboolean is_top_level_navigation;
-} SoupMessagePrivate;
-
+void             soup_message_set_status       (SoupMessage      *msg,
+						guint             status_code,
+						const char       *reason_phrase);
 void             soup_message_cleanup_response (SoupMessage      *msg);
-
-typedef enum {
-	SOUP_MESSAGE_IO_COMPLETE,
-	SOUP_MESSAGE_IO_INTERRUPTED,
-	SOUP_MESSAGE_IO_STOLEN
-} SoupMessageIOCompletion;
 
 typedef void     (*SoupMessageGetHeadersFn)  (SoupMessage      *msg,
 					      GString          *headers,
@@ -66,36 +28,11 @@ typedef guint    (*SoupMessageParseHeadersFn)(SoupMessage      *msg,
 					      SoupEncoding     *encoding,
 					      gpointer          user_data,
 					      GError          **error);
-typedef void     (*SoupMessageCompletionFn)  (SoupMessage      *msg,
-					      SoupMessageIOCompletion completion,
-					      gpointer          user_data);
 
-
-void soup_message_send_request (SoupMessageQueueItem      *item,
-				SoupMessageCompletionFn    completion_cb,
-				gpointer                   user_data);
-void soup_message_read_request (SoupMessage               *msg,
-				SoupSocket                *sock,
-				gboolean                   use_thread_context,
-				SoupMessageCompletionFn    completion_cb,
-				gpointer                   user_data);
-
-void soup_message_io_client    (SoupMessageQueueItem      *item,
-				GIOStream                 *iostream,
-				GMainContext              *async_context,
-				SoupMessageGetHeadersFn    get_headers_cb,
-				SoupMessageParseHeadersFn  parse_headers_cb,
-				gpointer                   headers_data,
-				SoupMessageCompletionFn    completion_cb,
-				gpointer                   user_data);
-void soup_message_io_server    (SoupMessage               *msg,
-				GIOStream                 *iostream,
-				GMainContext              *async_context,
-				SoupMessageGetHeadersFn    get_headers_cb,
-				SoupMessageParseHeadersFn  parse_headers_cb,
-				gpointer                   headers_data,
-				SoupMessageCompletionFn    completion_cb,
-				gpointer                   user_data);
+void soup_message_send_item (SoupMessage              *msg,
+                             SoupMessageQueueItem     *item,
+                             SoupMessageIOCompletionFn completion_cb,
+                             gpointer                  user_data);
 
 /* Auth handling */
 void           soup_message_set_auth       (SoupMessage *msg,
@@ -104,79 +41,119 @@ SoupAuth      *soup_message_get_auth       (SoupMessage *msg);
 void           soup_message_set_proxy_auth (SoupMessage *msg,
 					    SoupAuth    *auth);
 SoupAuth      *soup_message_get_proxy_auth (SoupMessage *msg);
+GUri          *soup_message_get_uri_for_auth (SoupMessage *msg);
 
 /* I/O */
-void       soup_message_io_stop        (SoupMessage *msg);
+void       soup_message_io_run         (SoupMessage *msg,
+					gboolean     blocking);
 void       soup_message_io_finished    (SoupMessage *msg);
-/* This is supposed to be private, but there are programs that rely on it
- * being exported. See bug #687758, #687468.
- */
-SOUP_AVAILABLE_IN_2_4
-void       soup_message_io_cleanup     (SoupMessage *msg);
 void       soup_message_io_pause       (SoupMessage *msg);
 void       soup_message_io_unpause     (SoupMessage *msg);
+gboolean   soup_message_is_io_paused   (SoupMessage *msg);
 gboolean   soup_message_io_in_progress (SoupMessage *msg);
-GIOStream *soup_message_io_steal       (SoupMessage *msg);
 
+gboolean soup_message_io_skip                  (SoupMessage        *msg,
+                                                gboolean            blocking,
+                                                GCancellable       *cancellable,
+                                                GError            **error);
 
-gboolean soup_message_io_run_until_write  (SoupMessage   *msg,
-					   gboolean       blocking,
-					   GCancellable  *cancellable,
-					   GError       **error);
-gboolean soup_message_io_run_until_read   (SoupMessage   *msg,
-					   gboolean       blocking,
-					   GCancellable  *cancellable,
-					   GError       **error);
-gboolean soup_message_io_run_until_finish (SoupMessage   *msg,
-					   gboolean       blocking,
-					   GCancellable  *cancellable,
-					   GError       **error);
-
-typedef gboolean (*SoupMessageSourceFunc) (SoupMessage *, gpointer);
-GSource *soup_message_io_get_source       (SoupMessage           *msg,
-					   GCancellable          *cancellable,
-					   SoupMessageSourceFunc  callback,
-					   gpointer               user_data);
+gboolean soup_message_io_run_until_read        (SoupMessage        *msg,
+                                                GCancellable       *cancellable,
+                                                GError            **error);
+void     soup_message_io_run_until_read_async  (SoupMessage        *msg,
+						int                 io_priority,
+                                                GCancellable       *cancellable,
+                                                GAsyncReadyCallback callback,
+                                                gpointer            user_data);
+gboolean soup_message_io_run_until_read_finish (SoupMessage        *msg,
+                                                GAsyncResult       *result,
+                                                GError            **error);
 
 GInputStream *soup_message_io_get_response_istream (SoupMessage  *msg,
 						    GError      **error);
+
+GCancellable *soup_message_io_get_cancellable  (SoupMessage *msg);
+
+void soup_message_wrote_headers     (SoupMessage *msg);
+void soup_message_wrote_body_data   (SoupMessage *msg,
+				     gsize        chunk_size);
+void soup_message_wrote_body        (SoupMessage *msg);
+void soup_message_got_informational (SoupMessage *msg);
+void soup_message_got_headers       (SoupMessage *msg);
+void soup_message_got_body          (SoupMessage *msg);
+void soup_message_content_sniffed   (SoupMessage *msg,
+				     const char  *content_type,
+				     GHashTable  *params);
+void soup_message_starting          (SoupMessage *msg);
+void soup_message_restarted         (SoupMessage *msg);
+void soup_message_finished          (SoupMessage *msg);
+gboolean soup_message_authenticate  (SoupMessage *msg,
+				     SoupAuth    *auth,
+				     gboolean     retrying);
+void soup_message_hsts_enforced     (SoupMessage *msg);
 
 gboolean soup_message_disables_feature (SoupMessage *msg,
 					gpointer     feature);
 
 GList *soup_message_get_disabled_features (SoupMessage *msg);
 
-void soup_message_set_https_status (SoupMessage    *msg,
-				    SoupConnection *conn);
-
-void soup_message_network_event (SoupMessage         *msg,
-				 GSocketClientEvent   event,
-				 GIOStream           *connection);
-
-GInputStream *soup_message_setup_body_istream (GInputStream *body_stream,
-					       SoupMessage *msg,
-					       SoupSession *session,
-					       SoupProcessingStage start_at_stage);
-
-void soup_message_set_soup_request (SoupMessage *msg,
-				    SoupRequest *req);
-
 SoupConnection *soup_message_get_connection (SoupMessage    *msg);
 void            soup_message_set_connection (SoupMessage    *msg,
 					     SoupConnection *conn);
+void            soup_message_transfer_connection (SoupMessage *preconnect_msg,
+                                                  SoupMessage *msg);
+void            soup_message_set_is_preconnect   (SoupMessage *msg,
+                                                  gboolean     is_preconnect);
+gboolean        soup_message_has_pending_tls_cert_request      (SoupMessage *msg);
+gboolean        soup_message_has_pending_tls_cert_pass_request (SoupMessage *msg);
 
-gpointer        soup_message_get_io_data (SoupMessage       *msg);
-void            soup_message_set_io_data (SoupMessage       *msg,
-					  gpointer           io);
+SoupClientMessageIO *soup_message_get_io_data (SoupMessage             *msg);
 
-SoupContentSniffer *soup_message_get_content_sniffer    (SoupMessage        *msg);
 void                soup_message_set_content_sniffer    (SoupMessage        *msg,
 							 SoupContentSniffer *sniffer);
-void                soup_message_set_bytes_for_sniffing (SoupMessage        *msg,
-							 gsize               bytes);
+gboolean            soup_message_has_content_sniffer    (SoupMessage        *msg);
+gboolean            soup_message_try_sniff_content      (SoupMessage        *msg,
+                                                         GInputStream       *stream,
+                                                         gboolean            blocking,
+                                                         GCancellable       *cancellable,
+                                                         GError            **error);
+GInputStream       *soup_message_get_request_body_stream (SoupMessage        *msg);
 
-gboolean    soup_message_has_chunk_allocator (SoupMessage *msg);
-SoupBuffer *soup_message_allocate_chunk      (SoupMessage *msg,
-					      goffset      read_length);
+void                soup_message_set_reason_phrase       (SoupMessage        *msg,
+                                                          const char         *reason_phrase);
+
+void                soup_message_set_http_version        (SoupMessage       *msg,
+						          SoupHTTPVersion    version);
+
+typedef enum {
+        SOUP_MESSAGE_METRICS_FETCH_START,
+        SOUP_MESSAGE_METRICS_DNS_START,
+        SOUP_MESSAGE_METRICS_DNS_END,
+        SOUP_MESSAGE_METRICS_CONNECT_START,
+        SOUP_MESSAGE_METRICS_CONNECT_END,
+        SOUP_MESSAGE_METRICS_TLS_START,
+        SOUP_MESSAGE_METRICS_REQUEST_START,
+        SOUP_MESSAGE_METRICS_RESPONSE_START,
+        SOUP_MESSAGE_METRICS_RESPONSE_END
+} SoupMessageMetricsType;
+
+void soup_message_set_metrics_timestamp (SoupMessage           *msg,
+                                         SoupMessageMetricsType type);
+
+void soup_message_set_request_host_from_uri     (SoupMessage *msg,
+                                                 GUri        *uri);
+
+void soup_message_update_request_host_if_needed (SoupMessage *msg);
+
+void soup_message_force_keep_alive_if_needed    (SoupMessage *msg);
+
+void     soup_message_set_force_http_version    (SoupMessage *msg,
+                                                 guint8       version);
+
+guint8   soup_message_get_force_http_version    (SoupMessage *msg);
+
+void     soup_message_set_is_misdirected_retry  (SoupMessage *msg,
+                                                 gboolean     is_misdirected_retry);
+gboolean soup_message_is_misdirected_retry      (SoupMessage *msg);
 
 #endif /* __SOUP_MESSAGE_PRIVATE_H__ */

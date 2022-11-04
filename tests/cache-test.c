@@ -1,86 +1,93 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright 2012 Red Hat, Inc.
  */
 
 #include "test-utils.h"
+#include <glib/gstdio.h>
 
 static void
-server_callback (SoupServer *server, SoupMessage *msg,
-		 const char *path, GHashTable *query,
-		 SoupClientContext *context, gpointer data)
+server_callback (SoupServer        *server,
+		 SoupServerMessage *msg,
+		 const char        *path,
+		 GHashTable        *query,
+		 gpointer           data)
 {
 	const char *last_modified, *etag;
 	const char *header;
+	const char *method;
+	SoupMessageHeaders *request_headers;
+	SoupMessageHeaders *response_headers;
 	guint status = SOUP_STATUS_OK;
 
-	if (msg->method != SOUP_METHOD_GET && msg->method != SOUP_METHOD_POST) {
-		soup_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED);
+	method = soup_server_message_get_method (msg);
+
+	if (method != SOUP_METHOD_GET && method != SOUP_METHOD_POST) {
+		soup_server_message_set_status (msg, SOUP_STATUS_NOT_IMPLEMENTED, NULL);
 		return;
 	}
 
-	header = soup_message_headers_get_one (msg->request_headers,
+	request_headers = soup_server_message_get_request_headers (msg);
+	response_headers = soup_server_message_get_response_headers (msg);
+	header = soup_message_headers_get_one (request_headers,
 					       "Test-Set-Expires");
 	if (header) {
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Expires",
 					     header);
 	}
 
-	header = soup_message_headers_get_one (msg->request_headers,
+	header = soup_message_headers_get_one (request_headers,
 					       "Test-Set-Cache-Control");
 	if (header) {
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Cache-Control",
 					     header);
 	}
 
-	last_modified = soup_message_headers_get_one (msg->request_headers,
+	last_modified = soup_message_headers_get_one (request_headers,
 						      "Test-Set-Last-Modified");
 	if (last_modified) {
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "Last-Modified",
 					     last_modified);
 	}
 
-	etag = soup_message_headers_get_one (msg->request_headers,
+	etag = soup_message_headers_get_one (request_headers,
 					     "Test-Set-ETag");
 	if (etag) {
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "ETag",
 					     etag);
 	}
 
 
-	header = soup_message_headers_get_one (msg->request_headers,
+	header = soup_message_headers_get_one (request_headers,
 					       "If-Modified-Since");
 	if (header && last_modified) {
-		SoupDate *date;
-		time_t lastmod, check;
+		GDateTime *modified_date, *header_date;
 
-		date = soup_date_new_from_string (last_modified);
-		lastmod = soup_date_to_time_t (date);
-		soup_date_free (date);
+		modified_date = soup_date_time_new_from_http_string (last_modified);
+		header_date = soup_date_time_new_from_http_string (header);
 
-		date = soup_date_new_from_string (header);
-		check = soup_date_to_time_t (date);
-		soup_date_free (date);
-
-		if (lastmod <= check)
+		if (g_date_time_compare (modified_date, header_date) <= 0)
 			status = SOUP_STATUS_NOT_MODIFIED;
+
+                g_date_time_unref (modified_date);
+                g_date_time_unref (header_date);
 	}
 
-	header = soup_message_headers_get_one (msg->request_headers,
+	header = soup_message_headers_get_one (request_headers,
 					       "If-None-Match");
 	if (header && etag) {
 		if (!strcmp (header, etag))
 			status = SOUP_STATUS_NOT_MODIFIED;
 	}
 
-	header = soup_message_headers_get_one (msg->request_headers,
+	header = soup_message_headers_get_one (request_headers,
 					       "Test-Set-My-Header");
 	if (header) {
-		soup_message_headers_append (msg->response_headers,
+		soup_message_headers_append (response_headers,
 					     "My-Header",
 					     header);
 	}
@@ -96,12 +103,12 @@ server_callback (SoupServer *server, SoupMessage *msg,
 		if (etag)
 			g_checksum_update (sum, (guchar *)etag, strlen (etag));
 		body = g_checksum_get_string (sum);
-		soup_message_set_response (msg, "text/plain",
-					   SOUP_MEMORY_COPY,
-					   body, strlen (body) + 1);
+		soup_server_message_set_response (msg, "text/plain",
+						  SOUP_MEMORY_COPY,
+						  body, strlen (body) + 1);
 		g_checksum_free (sum);
 	}
-	soup_message_set_status (msg, status);
+	soup_server_message_set_status (msg, status, NULL);
 }
 
 static gboolean
@@ -114,7 +121,7 @@ is_network_stream (GInputStream *stream)
 }
 
 static char *do_request (SoupSession        *session,
-			 SoupURI            *base_uri,
+			 GUri               *base_uri,
 			 const char         *method,
 			 const char         *path,
 			 SoupMessageHeaders *response_headers,
@@ -123,7 +130,6 @@ static char *do_request (SoupSession        *session,
 static gboolean last_request_hit_network;
 static gboolean last_request_validated;
 static gboolean last_request_unqueued;
-static guint cancelled_requests;
 
 static void
 copy_headers (const char         *name,
@@ -136,16 +142,15 @@ copy_headers (const char         *name,
 
 static char *
 do_request (SoupSession        *session,
-	    SoupURI            *base_uri,
+	    GUri               *base_uri,
 	    const char         *method,
 	    const char         *path,
 	    SoupMessageHeaders *response_headers,
 	    ...)
 {
-	SoupRequestHTTP *req;
 	SoupMessage *msg;
 	GInputStream *stream;
-	SoupURI *uri;
+	GUri *uri;
 	va_list ap;
 	const char *header, *value;
 	char buf[256];
@@ -155,31 +160,29 @@ do_request (SoupSession        *session,
 	last_request_validated = last_request_hit_network = FALSE;
 	last_request_unqueued = FALSE;
 
-	uri = soup_uri_new_with_base (base_uri, path);
-	req = soup_session_request_http_uri (session, method, uri, NULL);
-	soup_uri_free (uri);
-	msg = soup_request_http_get_message (req);
+	uri = g_uri_parse_relative (base_uri, path, SOUP_HTTP_URI_FLAGS, NULL);
+	msg = soup_message_new_from_uri (method, uri);
+	g_uri_unref (uri);
 
 	va_start (ap, response_headers);
 	while ((header = va_arg (ap, const char *))) {
 		value = va_arg (ap, const char *);
-		soup_message_headers_append (msg->request_headers,
+		soup_message_headers_append (soup_message_get_request_headers (msg),
 					     header, value);
 	}
 	va_end (ap);
 
-	stream = soup_test_request_send (SOUP_REQUEST (req), NULL, 0, &error);
+	stream = soup_test_request_send (session, msg, NULL, 0, &error);
 	if (!stream) {
 		debug_printf (1, "    could not send request: %s\n",
 			      error->message);
 		g_error_free (error);
-		g_object_unref (req);
 		g_object_unref (msg);
 		return NULL;
 	}
 
 	if (response_headers)
-		soup_message_headers_foreach (msg->response_headers, copy_headers, response_headers);
+		soup_message_headers_foreach (soup_message_get_response_headers (msg), copy_headers, response_headers);
 
 	g_object_unref (msg);
 
@@ -198,54 +201,53 @@ do_request (SoupSession        *session,
 			      error->message);
 		g_clear_error (&error);
 	}
-	soup_test_request_close_stream (SOUP_REQUEST (req), stream,
-					NULL, &error);
+	soup_test_request_close_stream (stream, NULL, &error);
 	if (error) {
 		debug_printf (1, "    could not close stream: %s\n",
 			      error->message);
 		g_clear_error (&error);
 	}
 	g_object_unref (stream);
-	g_object_unref (req);
 
 	/* Cache writes are G_PRIORITY_LOW, so they won't have happened yet... */
 	soup_cache_flush ((SoupCache *)soup_session_get_feature (session, SOUP_TYPE_CACHE));
 
-	return nread ? g_memdup (buf, nread) : g_strdup ("");
+	return nread ? g_memdup2 (buf, nread) : g_strdup ("");
 }
 
 static void
 do_request_with_cancel (SoupSession          *session,
-			SoupURI              *base_uri,
+			GUri                 *base_uri,
 			const char           *method,
 			const char           *path,
 			SoupTestRequestFlags  flags)
 {
-	SoupRequestHTTP *req;
+	SoupMessage *msg;
 	GInputStream *stream;
-	SoupURI *uri;
+	GUri *uri;
 	GError *error = NULL;
 	GCancellable *cancellable;
 
 	last_request_validated = last_request_hit_network = last_request_unqueued = FALSE;
-	cancelled_requests = 0;
 
-	uri = soup_uri_new_with_base (base_uri, path);
-	req = soup_session_request_http_uri (session, method, uri, NULL);
-	soup_uri_free (uri);
-	cancellable = flags & SOUP_TEST_REQUEST_CANCEL_CANCELLABLE ? g_cancellable_new () : NULL;
-	stream = soup_test_request_send (SOUP_REQUEST (req), cancellable, flags, &error);
+	uri = g_uri_parse_relative (base_uri, path, SOUP_HTTP_URI_FLAGS, NULL);
+	msg = soup_message_new_from_uri (method, uri);
+	g_uri_unref (uri);
+	cancellable = g_cancellable_new ();
+	stream = soup_test_request_send (session, msg, cancellable, flags, &error);
 	if (stream) {
 		debug_printf (1, "    could not cancel the request\n");
 		g_object_unref (stream);
-		g_object_unref (req);
+		g_object_unref (msg);
 		return;
-	} else
+	} else {
+		g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
 		g_clear_error (&error);
+	}
 
 	g_clear_object (&cancellable);
 	g_clear_object (&stream);
-	g_clear_object (&req);
+	g_clear_object (&msg);
 
 	soup_cache_flush ((SoupCache *)soup_session_get_feature (session, SOUP_TYPE_CACHE));
 }
@@ -253,12 +255,12 @@ do_request_with_cancel (SoupSession          *session,
 static void
 message_starting (SoupMessage *msg, gpointer data)
 {
-	if (soup_message_headers_get_one (msg->request_headers,
+	if (soup_message_headers_get_one (soup_message_get_request_headers (msg),
 					  "If-Modified-Since") ||
-	    soup_message_headers_get_one (msg->request_headers,
+	    soup_message_headers_get_one (soup_message_get_request_headers (msg),
 					  "If-None-Match")) {
 		debug_printf (2, "    Conditional request for %s\n",
-			      soup_message_get_uri (msg)->path);
+			      g_uri_get_path (soup_message_get_uri (msg)));
 		last_request_validated = TRUE;
 	}
 }
@@ -276,15 +278,13 @@ static void
 request_unqueued (SoupSession *session, SoupMessage *msg,
 		  gpointer data)
 {
-	if (msg->status_code == SOUP_STATUS_CANCELLED)
-		cancelled_requests++;
 	last_request_unqueued = TRUE;
 }
 
 static void
 do_basics_test (gconstpointer data)
 {
-	SoupURI *base_uri = (SoupURI *)data;
+	GUri *base_uri = (GUri *)data;
 	SoupSession *session;
 	SoupCache *cache;
 	char *cache_dir;
@@ -293,10 +293,8 @@ do_basics_test (gconstpointer data)
 	cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
 	debug_printf (2, "  Caching to %s\n", cache_dir);
 	cache = soup_cache_new (cache_dir, SOUP_CACHE_SINGLE_USER);
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC,
-					 SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-					 SOUP_SESSION_ADD_FEATURE, cache,
-					 NULL);
+	session = soup_test_session_new (NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
 
 	g_signal_connect (session, "request-queued",
 			  G_CALLBACK (request_queued), NULL);
@@ -476,7 +474,7 @@ do_basics_test (gconstpointer data)
 static void
 do_cancel_test (gconstpointer data)
 {
-	SoupURI *base_uri = (SoupURI *)data;
+	GUri *base_uri = (GUri *)data;
 	SoupSession *session;
 	SoupCache *cache;
 	char *cache_dir;
@@ -488,10 +486,9 @@ do_cancel_test (gconstpointer data)
 	cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
 	debug_printf (2, "  Caching to %s\n", cache_dir);
 	cache = soup_cache_new (cache_dir, SOUP_CACHE_SINGLE_USER);
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC,
-					 SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-					 SOUP_SESSION_ADD_FEATURE, cache,
-					 NULL);
+	session = soup_test_session_new (NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
+
 	g_signal_connect (session, "request-unqueued",
 			  G_CALLBACK (request_unqueued), NULL);
 
@@ -506,41 +503,24 @@ do_cancel_test (gconstpointer data)
 			    NULL);
 
 	/* Check that messages are correctly processed on cancellations. */
-	debug_printf (1, "  Cancel fresh resource with soup_session_message_cancel()\n");
-	flags = SOUP_TEST_REQUEST_CANCEL_MESSAGE | SOUP_TEST_REQUEST_CANCEL_IMMEDIATE;
-	do_request_with_cancel (session, base_uri, "GET", "/1", flags);
-	g_assert_cmpint (cancelled_requests, ==, 1);
-	soup_test_assert (last_request_unqueued,
-			  "Cancelled request /1 not unqueued");
-
 	debug_printf (1, "  Cancel fresh resource with g_cancellable_cancel()\n");
-	flags = SOUP_TEST_REQUEST_CANCEL_CANCELLABLE | SOUP_TEST_REQUEST_CANCEL_IMMEDIATE;
+	flags = SOUP_TEST_REQUEST_CANCEL_IMMEDIATE;
 	do_request_with_cancel (session, base_uri, "GET", "/1", flags);
-	g_assert_cmpint (cancelled_requests, ==, 1);
 	soup_test_assert (last_request_unqueued,
 			  "Cancelled request /1 not unqueued");
 
 	soup_test_session_abort_unref (session);
 
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC,
-					 SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-					 SOUP_SESSION_ADD_FEATURE, cache,
-					 NULL);
+	session = soup_test_session_new (NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
+
 	g_signal_connect (session, "request-unqueued",
 			  G_CALLBACK (request_unqueued), NULL);
 
 	/* Check that messages are correctly processed on cancellations. */
-	debug_printf (1, "  Cancel a revalidating resource with soup_session_message_cancel()\n");
-	flags = SOUP_TEST_REQUEST_CANCEL_MESSAGE | SOUP_TEST_REQUEST_CANCEL_IMMEDIATE;
-	do_request_with_cancel (session, base_uri, "GET", "/2", flags);
-	g_assert_cmpint (cancelled_requests, ==, 2);
-	soup_test_assert (last_request_unqueued,
-			  "Cancelled request /2 not unqueued");
-
 	debug_printf (1, "  Cancel a revalidating resource with g_cancellable_cancel()\n");
-	flags = SOUP_TEST_REQUEST_CANCEL_CANCELLABLE | SOUP_TEST_REQUEST_CANCEL_IMMEDIATE;
+	flags = SOUP_TEST_REQUEST_CANCEL_IMMEDIATE;
 	do_request_with_cancel (session, base_uri, "GET", "/2", flags);
-	g_assert_cmpint (cancelled_requests, ==, 2);
 	soup_test_assert (last_request_unqueued,
 			  "Cancelled request /2 not unqueued");
 
@@ -568,13 +548,13 @@ base_stream_unreffed (gpointer loop, GObject *ex_base_stream)
 static void
 do_refcounting_test (gconstpointer data)
 {
-	SoupURI *base_uri = (SoupURI *)data;
+	GUri *base_uri = (GUri *)data;
 	SoupSession *session;
 	SoupCache *cache;
 	char *cache_dir;
-	SoupRequestHTTP *req;
+	SoupMessage *msg;
 	GInputStream *stream, *base_stream;
-	SoupURI *uri;
+	GUri *uri;
 	GError *error = NULL;
 	guint flags;
 	GMainLoop *loop;
@@ -584,28 +564,25 @@ do_refcounting_test (gconstpointer data)
 	cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
 	debug_printf (2, "  Caching to %s\n", cache_dir);
 	cache = soup_cache_new (cache_dir, SOUP_CACHE_SINGLE_USER);
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC,
-					 SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-					 SOUP_SESSION_ADD_FEATURE, cache,
-					 NULL);
+	session = soup_test_session_new (NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
 
 	last_request_validated = last_request_hit_network = FALSE;
-	cancelled_requests = 0;
 
-	uri = soup_uri_new_with_base (base_uri, "/1");
-	req = soup_session_request_http_uri (session, "GET", uri, NULL);
-	soup_uri_free (uri);
+	uri = g_uri_parse_relative (base_uri, "/1", SOUP_HTTP_URI_FLAGS, NULL);
+	msg = soup_message_new_from_uri ("GET", uri);
+	g_uri_unref (uri);
 
-	flags = SOUP_TEST_REQUEST_CANCEL_AFTER_SEND_FINISH | SOUP_TEST_REQUEST_CANCEL_MESSAGE;
-	stream = soup_test_request_send (SOUP_REQUEST (req), NULL, flags, &error);
+	flags = SOUP_TEST_REQUEST_CANCEL_AFTER_SEND_FINISH;
+	stream = soup_test_request_send (session, msg, NULL, flags, &error);
 	if (!stream) {
 		debug_printf (1, "    could not send request: %s\n",
 			      error->message);
 		g_error_free (error);
-		g_object_unref (req);
+		g_object_unref (msg);
 		return;
 	}
-	g_object_unref (req);
+	g_object_unref (msg);
 
 	base_stream = g_filter_input_stream_get_base_stream (G_FILTER_INPUT_STREAM (stream));
 
@@ -618,16 +595,18 @@ do_refcounting_test (gconstpointer data)
 
 	soup_cache_flush ((SoupCache *)soup_session_get_feature (session, SOUP_TYPE_CACHE));
 
-	soup_test_session_abort_unref (session);
-
 	g_object_unref (cache);
 	g_free (cache_dir);
+
+	while (g_main_context_pending (NULL))
+                g_main_context_iteration (NULL, FALSE);
+	soup_test_session_abort_unref (session);
 }
 
 static void
 do_headers_test (gconstpointer data)
 {
-	SoupURI *base_uri = (SoupURI *)data;
+	GUri *base_uri = (GUri *)data;
 	SoupSession *session;
 	SoupMessageHeaders *headers;
 	SoupCache *cache;
@@ -638,10 +617,8 @@ do_headers_test (gconstpointer data)
 	cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
 	debug_printf (2, "  Caching to %s\n", cache_dir);
 	cache = soup_cache_new (cache_dir, SOUP_CACHE_SINGLE_USER);
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC,
-					 SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-					 SOUP_SESSION_ADD_FEATURE, cache,
-					 NULL);
+	session = soup_test_session_new (NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
 
 	g_signal_connect (session, "request-queued",
 			  G_CALLBACK (request_queued), NULL);
@@ -676,7 +653,7 @@ do_headers_test (gconstpointer data)
 
 	header_value = soup_message_headers_get_list (headers, "My-Header");
 	g_assert_cmpstr (header_value, ==, "My header NEW value");
-	soup_message_headers_free (headers);
+	soup_message_headers_unref (headers);
 
 	soup_test_session_abort_unref (session);
 	g_object_unref (cache);
@@ -707,7 +684,7 @@ count_cached_resources_in_dir (const char *cache_dir)
 static void
 do_leaks_test (gconstpointer data)
 {
-	SoupURI *base_uri = (SoupURI *)data;
+	GUri *base_uri = (GUri *)data;
 	SoupSession *session;
 	SoupCache *cache;
 	char *cache_dir;
@@ -716,10 +693,8 @@ do_leaks_test (gconstpointer data)
 	cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
 	debug_printf (2, "  Caching to %s\n", cache_dir);
 	cache = soup_cache_new (cache_dir, SOUP_CACHE_SINGLE_USER);
-	session = soup_test_session_new (SOUP_TYPE_SESSION_ASYNC,
-					 SOUP_SESSION_USE_THREAD_CONTEXT, TRUE,
-					 SOUP_SESSION_ADD_FEATURE, cache,
-					 NULL);
+	session = soup_test_session_new (NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
 
 	debug_printf (2, "  Initial requests\n");
 	body = do_request (session, base_uri, "GET", "/1", NULL,
@@ -764,16 +739,372 @@ do_leaks_test (gconstpointer data)
 	g_free (cache_dir);
 }
 
+static void
+do_metrics_test (gconstpointer data)
+{
+        GUri *base_uri = (GUri *)data;
+        SoupSession *session;
+        SoupCache *cache;
+        char *cache_dir;
+        char *body;
+        GUri *uri;
+        SoupMessage *msg;
+        SoupMessageHeaders *request_headers;
+        GInputStream *stream;
+        char buffer[256];
+        gsize nread;
+        SoupMessageMetrics *metrics;
+
+        cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
+        debug_printf (2, "  Caching to %s\n", cache_dir);
+        cache = soup_cache_new (cache_dir, SOUP_CACHE_SINGLE_USER);
+        session = soup_test_session_new (NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
+
+        g_signal_connect (session, "request-queued",
+                          G_CALLBACK (request_queued), NULL);
+        g_signal_connect (session, "request-unqueued",
+                          G_CALLBACK (request_unqueued), NULL);
+
+        body = do_request (session, base_uri, "GET", "/1", NULL,
+                           "Test-Set-Expires", "Fri, 01 Jan 2100 00:00:00 GMT",
+                           NULL);
+        g_free (body);
+
+        last_request_validated = last_request_hit_network = last_request_unqueued = FALSE;
+        uri = g_uri_parse_relative (base_uri, "/1", SOUP_HTTP_URI_FLAGS, NULL);
+        msg = soup_message_new_from_uri ("GET", uri);
+        g_uri_unref (uri);
+
+        soup_message_add_flags (msg, SOUP_MESSAGE_COLLECT_METRICS);
+        metrics = soup_message_get_metrics (msg);
+        g_assert_nonnull (metrics);
+        g_assert_cmpuint (soup_message_metrics_get_fetch_start (metrics), ==, 0);
+
+        stream = soup_test_request_send (session, msg, NULL, 0, NULL);
+        g_assert_true (G_IS_INPUT_STREAM (stream));
+        g_assert_false (is_network_stream (stream));
+        g_assert_null (soup_message_get_remote_address (msg));
+
+        g_assert_cmpuint (soup_message_metrics_get_fetch_start (metrics), >, 0);
+        g_assert_cmpuint (soup_message_metrics_get_dns_start (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_dns_end (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_connect_start (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_tls_start (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_connect_end (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_request_start (metrics), >=, soup_message_metrics_get_fetch_start (metrics));
+        g_input_stream_read_all (stream, buffer, sizeof (buffer), &nread, NULL, NULL);
+        g_assert_cmpuint (soup_message_metrics_get_response_start (metrics), >=, soup_message_metrics_get_request_start (metrics));
+        soup_test_request_close_stream (stream, NULL, NULL);
+        g_object_unref (stream);
+        g_assert_cmpuint (soup_message_metrics_get_response_end (metrics), >=, soup_message_metrics_get_response_start (metrics));
+        g_assert_cmpuint (soup_message_metrics_get_request_header_bytes_sent (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_request_body_bytes_sent (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_request_body_size (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_response_header_bytes_received (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_response_body_size (metrics), >, 0);
+        g_object_unref (msg);
+
+        body = do_request (session, base_uri, "GET", "/2", NULL,
+                           "Test-Set-Last-Modified", "Fri, 01 Jan 2010 00:00:00 GMT",
+                           "Test-Set-Expires", "Sat, 02 Jan 2011 00:00:00 GMT",
+                           "Test-Set-Cache-Control", "must-revalidate",
+                           NULL);
+        g_free (body);
+
+        last_request_validated = last_request_hit_network = last_request_unqueued = FALSE;
+        uri = g_uri_parse_relative (base_uri, "/2", SOUP_HTTP_URI_FLAGS, NULL);
+        msg = soup_message_new_from_uri ("GET", uri);
+        g_uri_unref (uri);
+
+        request_headers = soup_message_get_request_headers (msg);
+        soup_message_headers_append (request_headers,
+                                     "Test-Set-Last-Modified", "Fri, 01 Jan 2010 00:00:00 GMT");
+        soup_message_headers_append (request_headers,
+                                     "Test-Set-Expires", "Sat, 02 Jan 2011 00:00:00 GMT");
+        soup_message_headers_append (request_headers,
+                                     "Test-Set-Cache-Control", "must-revalidate");
+
+        soup_message_add_flags (msg, SOUP_MESSAGE_COLLECT_METRICS);
+        metrics = soup_message_get_metrics (msg);
+        g_assert_nonnull (metrics);
+        g_assert_cmpuint (soup_message_metrics_get_fetch_start (metrics), ==, 0);
+
+        stream = soup_test_request_send (session, msg, NULL, 0, NULL);
+        g_assert_true (G_IS_INPUT_STREAM (stream));
+        g_assert_false (is_network_stream (stream));
+        g_assert_null (soup_message_get_remote_address (msg));
+        g_assert_true (last_request_validated);
+
+        g_assert_cmpuint (soup_message_metrics_get_fetch_start (metrics), >, 0);
+        g_assert_cmpuint (soup_message_metrics_get_dns_start (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_dns_end (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_connect_start (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_tls_start (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_connect_end (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_request_start (metrics), >=, soup_message_metrics_get_fetch_start (metrics));
+        g_input_stream_read_all (stream, buffer, sizeof (buffer), &nread, NULL, NULL);
+        g_assert_cmpuint (soup_message_metrics_get_response_start (metrics), >=, soup_message_metrics_get_request_start (metrics));
+        soup_test_request_close_stream (stream, NULL, NULL);
+        g_object_unref (stream);
+        g_assert_cmpuint (soup_message_metrics_get_response_end (metrics), >=, soup_message_metrics_get_response_start (metrics));
+        g_assert_cmpuint (soup_message_metrics_get_request_header_bytes_sent (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_request_body_bytes_sent (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_request_body_size (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_response_header_bytes_received (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), ==, 0);
+        g_assert_cmpuint (soup_message_metrics_get_response_body_size (metrics), >, 0);
+        g_object_unref (msg);
+
+        soup_test_session_abort_unref (session);
+        g_object_unref (cache);
+        g_free (cache_dir);
+}
+
+typedef struct {
+        SoupSession *session;
+        GUri *uri;
+        gboolean must_revalidate;
+        gboolean is_expired;
+        gboolean hit_network;
+        gboolean validated;
+        GError *error;
+} ThreadTestRequest;
+
+static void
+threads_message_starting (SoupMessage       *msg,
+                          ThreadTestRequest *request)
+{
+        SoupMessageHeaders *request_headers;
+
+        if (request->validated)
+                return;
+
+        request_headers = soup_message_get_request_headers (msg);
+        request->validated = !!soup_message_headers_get_one (request_headers, "If-Modified-Since");
+}
+
+static void
+threads_request_queued (SoupSession       *session,
+                        SoupMessage       *msg,
+                        ThreadTestRequest *request)
+{
+        if (soup_message_get_uri (msg) != request->uri)
+                return;
+
+        g_signal_connect (msg, "starting",
+                          G_CALLBACK (threads_message_starting),
+                          request);
+}
+
+static void
+task_async_function (GTask        *task,
+                     GObject      *source,
+                     gpointer      task_data,
+                     GCancellable *cancellable)
+{
+        GMainContext *context;
+        SoupMessage *msg;
+        SoupMessageHeaders *request_headers;
+        GInputStream *stream;
+        ThreadTestRequest *request = (ThreadTestRequest *)task_data;
+
+        context = g_main_context_new ();
+        g_main_context_push_thread_default (context);
+
+        msg = soup_message_new_from_uri ("GET", request->uri);
+        g_signal_connect (request->session, "request-queued",
+                          G_CALLBACK (threads_request_queued),
+                          request);
+        request_headers = soup_message_get_request_headers (msg);
+        if (request->must_revalidate) {
+                soup_message_headers_append (request_headers,
+                                             "Test-Set-Last-Modified",
+                                             request->is_expired ? "Sat, 02 Jan 2010 00:00:00 GMT" : "Fri, 01 Jan 2010 00:00:00 GMT");
+                soup_message_headers_append (request_headers,
+                                             "Test-Set-Expires", "Sat, 02 Jan 2011 00:00:00 GMT");
+                soup_message_headers_append (request_headers,
+                                             "Test-Set-Cache-Control", "must-revalidate");
+        } else {
+                soup_message_headers_append (request_headers,
+                                             "Test-Set-Expires", "Fri, 01 Jan 2100 00:00:00 GMT");
+        }
+
+        stream = soup_test_request_send (request->session, msg, NULL, 0, &request->error);
+        if (stream) {
+                request->hit_network = is_network_stream (stream);
+                soup_test_request_read_all (stream, NULL, &request->error);
+                g_object_unref (stream);
+        }
+
+        g_signal_handlers_disconnect_by_data (request->session, request);
+
+        g_object_unref (msg);
+
+        /* Continue iterating to ensure the item is unqueued and the connection released */
+        while (g_main_context_pending (context))
+                g_main_context_iteration (context, TRUE);
+
+        /* Cache writes are G_PRIORITY_LOW, so they won't have happened yet */
+        soup_cache_flush ((SoupCache *)soup_session_get_feature (request->session, SOUP_TYPE_CACHE));
+
+        g_task_return_boolean (task, TRUE);
+
+        g_main_context_pop_thread_default (context);
+        g_main_context_unref (context);
+}
+
+static void
+task_finished_cb (SoupSession  *session,
+                  GAsyncResult *result,
+                  guint        *finished_count)
+{
+        g_assert_true (g_task_propagate_boolean (G_TASK (result), NULL));
+        g_atomic_int_inc (finished_count);
+}
+
+static void
+do_threads_test (gconstpointer data)
+{
+        GUri *base_uri = (GUri *)data;
+        SoupSession *session;
+        SoupCache *cache;
+        char *cache_dir;
+        ThreadTestRequest requests[4];
+        guint i;
+        guint finished_count = 0;
+
+        session = soup_test_session_new (NULL);
+
+        cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
+        cache = soup_cache_new (cache_dir, SOUP_CACHE_SINGLE_USER);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (cache));
+
+        requests[0].session = session;
+        requests[0].uri = g_uri_parse_relative (base_uri, "/1", SOUP_HTTP_URI_FLAGS, NULL);
+        requests[0].must_revalidate = FALSE;
+        requests[0].is_expired = FALSE;
+        requests[1].session = session;
+        requests[1].uri = g_uri_parse_relative (base_uri, "/2", SOUP_HTTP_URI_FLAGS, NULL);
+        requests[1].must_revalidate = TRUE;
+        requests[1].is_expired = FALSE;
+        requests[2].session = session;
+        requests[2].uri = g_uri_parse_relative (base_uri, "/3", SOUP_HTTP_URI_FLAGS, NULL);
+        requests[2].must_revalidate = FALSE;
+        requests[2].is_expired = FALSE;
+        requests[3].session = session;
+        requests[3].uri = g_uri_parse_relative (base_uri, "/4", SOUP_HTTP_URI_FLAGS, NULL);
+        requests[3].must_revalidate = TRUE;
+        requests[3].is_expired = FALSE;
+
+        for (i = 0; i < 4; i++) {
+                GTask *task;
+
+                requests[i].hit_network = FALSE;
+                requests[i].validated = FALSE;
+                requests[i].error = NULL;
+
+                task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_task_data (task, &requests[i], NULL);
+                g_task_run_in_thread (task, (GTaskThreadFunc)task_async_function);
+                g_object_unref (task);
+        }
+
+        while (g_atomic_int_get (&finished_count) != 4)
+                g_main_context_iteration (NULL, TRUE);
+
+        /* Initial requests hit the network */
+        for (i = 0; i < 4; i++) {
+                g_assert_true (requests[i].hit_network);
+                g_assert_false (requests[i].validated);
+                g_assert_no_error (requests[i].error);
+        }
+
+        finished_count = 0;
+        for (i = 0; i < 4; i++) {
+                GTask *task;
+
+                requests[i].hit_network = FALSE;
+                requests[i].validated = FALSE;
+                requests[i].error = NULL;
+
+                task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_task_data (task, &requests[i], NULL);
+                g_task_run_in_thread (task, (GTaskThreadFunc)task_async_function);
+                g_object_unref (task);
+        }
+
+        while (g_atomic_int_get (&finished_count) != 4)
+                g_main_context_iteration (NULL, TRUE);
+
+        /* None of the requests hit the ntwork */
+        for (i = 0; i < 4; i++) {
+                g_assert_false (requests[i].hit_network);
+                g_assert_no_error (requests[i].error);
+        }
+
+        /* The ones including must-revalidate are validated */
+        g_assert_false (requests[0].validated);
+        g_assert_true (requests[1].validated);
+        g_assert_false (requests[2].validated);
+        g_assert_true (requests[3].validated);
+
+        /* Try again making the validations fail */
+        requests[1].is_expired = TRUE;
+        requests[3].is_expired = TRUE;
+
+        finished_count = 0;
+        for (i = 0; i < 4; i++) {
+                GTask *task;
+
+                requests[i].hit_network = FALSE;
+                requests[i].validated = FALSE;
+                requests[i].error = NULL;
+
+                task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_task_data (task, &requests[i], NULL);
+                g_task_run_in_thread (task, (GTaskThreadFunc)task_async_function);
+                g_object_unref (task);
+        }
+
+        while (g_atomic_int_get (&finished_count) != 4)
+                g_main_context_iteration (NULL, TRUE);
+
+        /* None of the requests failed */
+        for (i = 0; i < 4; i++)
+                g_assert_no_error (requests[i].error);
+
+        /* The ones including must-revalidate are validated and hit the network this time */
+        g_assert_false (requests[0].validated);
+        g_assert_false (requests[0].hit_network);
+        g_assert_true (requests[1].validated);
+        g_assert_true (requests[1].hit_network);
+        g_assert_false (requests[2].validated);
+        g_assert_false (requests[2].hit_network);
+        g_assert_true (requests[3].validated);
+        g_assert_true (requests[3].hit_network);
+
+        for (i = 0; i < 4; i++)
+                g_uri_unref (requests[i].uri);
+
+        soup_test_session_abort_unref (session);
+        soup_cache_clear (cache);
+        g_rmdir (cache_dir);
+        g_object_unref (cache);
+        g_free (cache_dir);
+}
+
 int
 main (int argc, char **argv)
 {
 	SoupServer *server;
-	SoupURI *base_uri;
+	GUri *base_uri;
 	int ret;
 
 	test_init (argc, argv, NULL);
 
-	server = soup_test_server_new (TRUE);
+	server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
 	soup_server_add_handler (server, NULL, server_callback, NULL, NULL);
 	base_uri = soup_test_server_get_uri (server, "http", NULL);
 
@@ -782,10 +1113,12 @@ main (int argc, char **argv)
 	g_test_add_data_func ("/cache/refcounting", base_uri, do_refcounting_test);
 	g_test_add_data_func ("/cache/headers", base_uri, do_headers_test);
 	g_test_add_data_func ("/cache/leaks", base_uri, do_leaks_test);
+        g_test_add_data_func ("/cache/metrics", base_uri, do_metrics_test);
+        g_test_add_data_func ("/cache/threads", base_uri, do_threads_test);
 
 	ret = g_test_run ();
 
-	soup_uri_free (base_uri);
+	g_uri_unref (base_uri);
 	soup_test_server_quit_unref (server);
 
 	test_cleanup ();

@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-client-input-stream.c
  *
@@ -12,10 +12,17 @@
 #include "soup-client-input-stream.h"
 #include "soup.h"
 #include "soup-message-private.h"
+#include "soup-message-metrics-private.h"
+#include "soup-misc.h"
 
-struct _SoupClientInputStreamPrivate {
-	SoupMessage  *msg;
+struct _SoupClientInputStream {
+	SoupFilterInputStream parent_instance;
 };
+
+typedef struct {
+	SoupMessage  *msg;
+        SoupMessageMetrics *metrics;
+} SoupClientInputStreamPrivate;
 
 enum {
 	SIGNAL_EOF,
@@ -27,29 +34,33 @@ static guint signals[LAST_SIGNAL] = { 0 };
 enum {
 	PROP_0,
 
-	PROP_MESSAGE
+	PROP_MESSAGE,
+
+        LAST_PROPERTY
 };
+
+static GParamSpec *properties[LAST_PROPERTY] = { NULL, };
 
 static GPollableInputStreamInterface *soup_client_input_stream_parent_pollable_interface;
 static void soup_client_input_stream_pollable_init (GPollableInputStreamInterface *pollable_interface, gpointer interface_data);
 
-G_DEFINE_TYPE_WITH_CODE (SoupClientInputStream, soup_client_input_stream, SOUP_TYPE_FILTER_INPUT_STREAM,
-                         G_ADD_PRIVATE (SoupClientInputStream)
-			 G_IMPLEMENT_INTERFACE (G_TYPE_POLLABLE_INPUT_STREAM,
-						soup_client_input_stream_pollable_init))
+G_DEFINE_FINAL_TYPE_WITH_CODE (SoupClientInputStream, soup_client_input_stream, SOUP_TYPE_FILTER_INPUT_STREAM,
+                               G_ADD_PRIVATE (SoupClientInputStream)
+			       G_IMPLEMENT_INTERFACE (G_TYPE_POLLABLE_INPUT_STREAM,
+						      soup_client_input_stream_pollable_init))
 
 static void
 soup_client_input_stream_init (SoupClientInputStream *stream)
 {
-	stream->priv = soup_client_input_stream_get_instance_private (stream);
 }
 
 static void
 soup_client_input_stream_finalize (GObject *object)
 {
 	SoupClientInputStream *cistream = SOUP_CLIENT_INPUT_STREAM (object);
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (cistream);
 
-	g_clear_object (&cistream->priv->msg);
+	g_clear_object (&priv->msg);
 
 	G_OBJECT_CLASS (soup_client_input_stream_parent_class)->finalize (object);
 }
@@ -59,10 +70,12 @@ soup_client_input_stream_set_property (GObject *object, guint prop_id,
 				       const GValue *value, GParamSpec *pspec)
 {
 	SoupClientInputStream *cistream = SOUP_CLIENT_INPUT_STREAM (object);
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (cistream);
 
 	switch (prop_id) {
 	case PROP_MESSAGE:
-		cistream->priv->msg = g_value_dup_object (value);
+		priv->msg = g_value_dup_object (value);
+                priv->metrics = soup_message_get_metrics (priv->msg);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -75,10 +88,11 @@ soup_client_input_stream_get_property (GObject *object, guint prop_id,
 				       GValue *value, GParamSpec *pspec)
 {
 	SoupClientInputStream *cistream = SOUP_CLIENT_INPUT_STREAM (object);
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (cistream);
 
 	switch (prop_id) {
 	case PROP_MESSAGE:
-		g_value_set_object (value, cistream->priv->msg);
+		g_value_set_object (value, priv->msg);
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -93,10 +107,17 @@ soup_client_input_stream_read_fn (GInputStream  *stream,
 				  GCancellable  *cancellable,
 				  GError       **error)
 {
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (SOUP_CLIENT_INPUT_STREAM (stream));
 	gssize nread;
+
+        if (g_cancellable_set_error_if_cancelled (soup_message_io_get_cancellable (priv->msg), error))
+                return -1;
 
 	nread = G_INPUT_STREAM_CLASS (soup_client_input_stream_parent_class)->
 		read_fn (stream, buffer, count, cancellable, error);
+
+        if (priv->metrics && nread > 0)
+                priv->metrics->response_body_size += nread;
 
 	if (nread == 0)
 		g_signal_emit (stream, signals[SIGNAL_EOF], 0);
@@ -105,15 +126,46 @@ soup_client_input_stream_read_fn (GInputStream  *stream,
 }
 
 static gssize
+soup_client_input_stream_skip (GInputStream  *stream,
+                               gsize          count,
+                               GCancellable  *cancellable,
+                               GError       **error)
+{
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (SOUP_CLIENT_INPUT_STREAM (stream));
+        gssize nread;
+
+        if (g_cancellable_set_error_if_cancelled (soup_message_io_get_cancellable (priv->msg), error))
+                return -1;
+
+        nread = G_INPUT_STREAM_CLASS (soup_client_input_stream_parent_class)->
+                skip (stream, count, cancellable, error);
+
+        if (priv->metrics && nread > 0)
+	        priv->metrics->response_body_size += nread;
+
+        if (nread == 0)
+                g_signal_emit (stream, signals[SIGNAL_EOF], 0);
+
+        return nread;
+}
+
+static gssize
 soup_client_input_stream_read_nonblocking (GPollableInputStream  *stream,
 					   void                  *buffer,
 					   gsize                  count,
 					   GError               **error)
 {
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (SOUP_CLIENT_INPUT_STREAM (stream));
 	gssize nread;
+
+        if (g_cancellable_set_error_if_cancelled (soup_message_io_get_cancellable (priv->msg), error))
+                return -1;
 
 	nread = soup_client_input_stream_parent_pollable_interface->
 		read_nonblocking (stream, buffer, count, error);
+
+        if (priv->metrics && nread > 0)
+	        priv->metrics->response_body_size += nread;
 
 	if (nread == 0)
 		g_signal_emit (stream, signals[SIGNAL_EOF], 0);
@@ -127,22 +179,12 @@ soup_client_input_stream_close_fn (GInputStream  *stream,
 				   GError       **error)
 {
 	SoupClientInputStream *cistream = SOUP_CLIENT_INPUT_STREAM (stream);
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (cistream);
 	gboolean success;
 
-	success = soup_message_io_run_until_finish (cistream->priv->msg, TRUE,
-						    NULL, error);
-	soup_message_io_finished (cistream->priv->msg);
+	success = soup_message_io_skip (priv->msg, TRUE, cancellable, error);
+	soup_message_io_finished (priv->msg);
 	return success;
-}
-
-static gboolean
-idle_finish_close (gpointer user_data)
-{
-	GTask *task = user_data;
-
-	g_task_return_boolean (task, TRUE);
-	g_object_unref (task);
-	return FALSE;
 }
 
 static gboolean
@@ -150,30 +192,23 @@ close_async_ready (SoupMessage *msg, gpointer user_data)
 {
 	GTask *task = user_data;
 	SoupClientInputStream *cistream = g_task_get_source_object (task);
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (cistream);
 	GError *error = NULL;
 
-	if (!soup_message_io_run_until_finish (cistream->priv->msg, FALSE,
-					       g_task_get_cancellable (task),
-					       &error) &&
+	if (!soup_message_io_skip (priv->msg, FALSE, g_task_get_cancellable (task), &error) &&
 	    g_error_matches (error, G_IO_ERROR, G_IO_ERROR_WOULD_BLOCK)) {
 		g_error_free (error);
 		return TRUE;
 	}
 
-	soup_message_io_finished (cistream->priv->msg);
+	soup_message_io_finished (priv->msg);
 
-	if (error) {
+	if (error)
 		g_task_return_error (task, error);
-		g_object_unref (task);
-		return FALSE;
-	}
+        else
+                g_task_return_boolean (task, TRUE);
+        g_object_unref (task);
 
-	/* Due to a historical accident, SoupSessionAsync relies on us
-	 * waiting one extra cycle after run_until_finish() returns.
-	 * Ugh. FIXME later when it's easier to do.
-	 */
-	soup_add_idle (g_main_context_get_thread_default (),
-		       idle_finish_close, task);
 	return FALSE;
 }
 
@@ -185,15 +220,21 @@ soup_client_input_stream_close_async (GInputStream        *stream,
 				      gpointer             user_data)
 {
 	SoupClientInputStream *cistream = SOUP_CLIENT_INPUT_STREAM (stream);
+        SoupClientInputStreamPrivate *priv = soup_client_input_stream_get_instance_private (cistream);
 	GTask *task;
 	GSource *source;
 
 	task = g_task_new (stream, cancellable, callback, user_data);
 	g_task_set_priority (task, priority);
 
-	if (close_async_ready (cistream->priv->msg, task) == G_SOURCE_CONTINUE) {
-		source = soup_message_io_get_source (cistream->priv->msg,
-						     cancellable, NULL, NULL);
+	if (close_async_ready (priv->msg, task) == G_SOURCE_CONTINUE) {
+                /* When SoupClientInputStream is created we always have a body input stream,
+                 * and we finished writing, so it's safe to pass NULL for the streams
+                 */
+		source = soup_message_io_data_get_source ((SoupMessageIOData *)soup_message_get_io_data (priv->msg),
+							  G_OBJECT (priv->msg),
+                                                          NULL, NULL,
+							  cancellable, NULL, NULL);
 
 		g_task_attach_source (task, source, (GSourceFunc) close_async_ready);
 		g_source_unref (source);
@@ -219,6 +260,7 @@ soup_client_input_stream_class_init (SoupClientInputStreamClass *stream_class)
 	object_class->get_property = soup_client_input_stream_get_property;
 
 	input_stream_class->read_fn = soup_client_input_stream_read_fn;
+	input_stream_class->skip = soup_client_input_stream_skip;
 	input_stream_class->close_fn = soup_client_input_stream_close_fn;
 	input_stream_class->close_async = soup_client_input_stream_close_async;
 	input_stream_class->close_finish = soup_client_input_stream_close_finish;
@@ -232,14 +274,15 @@ soup_client_input_stream_class_init (SoupClientInputStreamClass *stream_class)
 			      NULL,
 			      G_TYPE_NONE, 0);
 
-	g_object_class_install_property (
-		object_class, PROP_MESSAGE,
+        properties[PROP_MESSAGE] =
 		g_param_spec_object ("message",
 				     "Message",
 				     "Message",
 				     SOUP_TYPE_MESSAGE,
 				     G_PARAM_READWRITE | G_PARAM_CONSTRUCT_ONLY |
-				     G_PARAM_STATIC_STRINGS));
+				     G_PARAM_STATIC_STRINGS);
+
+        g_object_class_install_properties (object_class, LAST_PROPERTY, properties);
 }
 
 static void

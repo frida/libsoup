@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 
 #include "test-utils.h"
 
@@ -124,8 +124,8 @@ static struct RequestTest {
 	  "GET / HTTP/1.1\r\nFoo: bar\r\n baz\r\nConnection: close\r\nBlah: blah\r\n", -1,
 	  SOUP_STATUS_OK,
 	  "GET", "/", SOUP_HTTP_1_1,
-	  { { "Foo", "bar baz" },
-	    { "Connection", "close" },
+	  { { "Connection", "close" },
+            { "Foo", "bar baz" },
 	    { "Blah", "blah" },
 	    { NULL }
 	  }
@@ -166,8 +166,8 @@ static struct RequestTest {
 	  "GET / HTTP/1.0\r\nFoo: bar\r\nConnection: Bar, Quux\r\nBar: baz\r\nQuux: foo\r\n", -1,
 	  SOUP_STATUS_OK,
 	  "GET", "/", SOUP_HTTP_1_0,
-	  { { "Foo", "bar" },
-	    { "Connection", "Bar, Quux" },
+	  { { "Connection", "Bar, Quux" },
+            { "Foo", "bar" },
 	    { NULL }
 	  }
 	},
@@ -321,8 +321,8 @@ static struct RequestTest {
 	  "GET / HTTP/1.1\r\na: b\r\nHost: example\rcom\r\np: \rq\r\ns: t\r\r\nc: d\r\n", -1,
 	  SOUP_STATUS_OK,
 	  "GET", "/", SOUP_HTTP_1_1,
-	  { { "a", "b" },
-	    { "Host", "example com" },	/* CR in the middle turns to space */
+	  { { "Host", "example com" },  /* CR in the middle turns to space */
+            { "a", "b" },
 	    { "p", "q" },		/* CR at beginning is ignored */
 	    { "s", "t" },		/* CR at end is ignored */
 	    { "c", "d" },
@@ -528,8 +528,8 @@ static struct ResponseTest {
 	{ "Connection header on HTTP/1.0 message", NULL,
 	  "HTTP/1.0 200 ok\r\nFoo: bar\r\nConnection: Bar\r\nBar: quux\r\n", -1,
 	  SOUP_HTTP_1_0, SOUP_STATUS_OK, "ok",
-	  { { "Foo", "bar" },
-	    { "Connection", "Bar" },
+	  { { "Connection", "Bar" },
+            { "Foo", "bar" },
 	    { NULL }
 	  }
 	},
@@ -901,7 +901,7 @@ do_request_tests (void)
 
 		g_free (method);
 		g_free (path);
-		soup_message_headers_free (headers);
+		soup_message_headers_unref (headers);
 	}
 }
 
@@ -937,7 +937,7 @@ do_response_tests (void)
 			g_assert_null (resptests[i].reason_phrase);
 
 		g_free (reason_phrase);
-		soup_message_headers_free (headers);
+		soup_message_headers_unref (headers);
 	}
 }
 
@@ -1042,9 +1042,8 @@ do_content_disposition_tests (void)
 	GHashTable *params;
 	const char *header, *filename, *parameter2;
 	char *disposition;
-	SoupBuffer *buffer;
+	GBytes *buffer;
 	SoupMultipart *multipart;
-	SoupMessageBody *body;
 
 	hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_MULTIPART);
 	params = g_hash_table_new (g_str_hash, g_str_equal);
@@ -1135,28 +1134,24 @@ do_content_disposition_tests (void)
         g_assert_cmpstr (parameter2, ==, "bar");
 	g_hash_table_destroy (params);
 
-	soup_message_headers_free (hdrs);
+	soup_message_headers_unref (hdrs);
 
 	/* Ensure that soup-multipart always quotes filename */
 	g_test_bug ("641280");
 	multipart = soup_multipart_new (SOUP_FORM_MIME_TYPE_MULTIPART);
-	buffer = soup_buffer_new (SOUP_MEMORY_STATIC, "foo", 3);
+	buffer = g_bytes_new_static ("foo", 3);
 	soup_multipart_append_form_file (multipart, "test", "token",
 					 "text/plain", buffer);
-	soup_buffer_free (buffer);
+	g_bytes_unref (buffer);
 
 	hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_MULTIPART);
-	body = soup_message_body_new ();
-	soup_multipart_to_message (multipart, hdrs, body);
-	soup_message_headers_free (hdrs);
+	soup_multipart_to_message (multipart, hdrs, &buffer);
+	soup_message_headers_unref (hdrs);
 	soup_multipart_free (multipart);
 
-	buffer = soup_message_body_flatten (body);
-	soup_message_body_free (body);
+	g_assert_nonnull (strstr (g_bytes_get_data (buffer, NULL), "filename=\"token\""));
 
-	g_assert_true (strstr (buffer->data, "filename=\"token\""));
-
-	soup_buffer_free (buffer);
+	g_bytes_unref (buffer);
 }
 
 #define CONTENT_TYPE_TEST_MIME_TYPE "text/plain"
@@ -1206,7 +1201,7 @@ do_content_type_tests (void)
 	mime_type = soup_message_headers_get_content_type (hdrs, &params);
 	g_assert_null (mime_type);
 
-	soup_message_headers_free (hdrs);
+	soup_message_headers_unref (hdrs);
 }
 
 struct {
@@ -1271,7 +1266,7 @@ do_bad_header_tests (void)
 					     bad_headers[i].value);
 		g_test_assert_expected_messages ();
 	}
-	soup_message_headers_free (hdrs);
+	soup_message_headers_unref (hdrs);
 }
 
 int

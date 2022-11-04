@@ -1,18 +1,17 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * Copyright (C) 2008 Red Hat, Inc.
  */
 
-#ifndef __SOUP_METHOD_H__
-#define __SOUP_METHOD_H__ 1
+#pragma once
 
-#include <libsoup/soup-types.h>
-#include <libsoup/soup-misc.h>
+#include "soup-types.h"
 
 G_BEGIN_DECLS
 
 /**
  * SECTION:soup-method
+ * @section_id: SoupMethod
  * @short_description: HTTP method definitions
  *
  * soup-method.h contains a number of defines for standard HTTP and
@@ -20,14 +19,14 @@ G_BEGIN_DECLS
  * arbitrary strings to soup_message_new() if you prefer.
  * 
  * The thing that these defines <emphasis>are</emphasis> useful for is
- * performing quick comparisons against #SoupMessage's %method field;
- * because that field always contains an interned string, and these
- * macros return interned strings, you can compare %method directly
+ * performing quick comparisons against soup_message_get_method();
+ * because #SoupMessage always contains an interned string, and these
+ * macros return interned strings, you can compare methods directly
  * against these macros rather than needing to use strcmp(). This is
- * most useful in SoupServer handlers. Eg:
+ * most useful in #SoupServer handlers. Eg:
  * 
  * <informalexample><programlisting>
- * 	if (msg->method != SOUP_METHOD_GET &amp;&amp; msg->method != SOUP_METHOD_HEAD) {
+ * 	if (soup_message_get_method (msg) != SOUP_METHOD_GET &amp;&amp; soup_message_get_method (msg) != SOUP_METHOD_HEAD) {
  * 		soup_message_set_status (msg, SOUP_METHOD_NOT_IMPLEMENTED);
  * 		return;
  * 	}
@@ -76,5 +75,3 @@ SOUP_VAR gpointer _SOUP_METHOD_LOCK;
 SOUP_VAR gpointer _SOUP_METHOD_UNLOCK;
 
 G_END_DECLS
-
-#endif /* __SOUP_METHOD_H__ */

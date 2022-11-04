@@ -1,74 +1,69 @@
-ignore_headers = [
-  'soup.h',
-  'soup-autocleanups.h',
-  'soup-enum-types.h',
-  'soup-message-private.h',
-  'soup-session-private.h',
-  'soup-auth-basic.h',
-  'soup-auth-digest.h',
-  'soup-auth-ntlm.h',
-  'soup-auth-negotiate.h',
-  'soup-brotli-decompressor.h',
-  'soup-connection.h',
-  'soup-connection-auth.h',
-  'soup-message-queue.h',
-  'soup-path-map.h',
-  'soup-gnome-features.h',
-  'soup-proxy-resolver.h',
-  'soup-proxy-resolver-gnome.h',
-  'soup-proxy-resolver-static.h',
-  'soup-directory-input-stream.h',
-  'soup-http-input-stream.h',
-  'soup-password-manager.h',
-  'soup-password-manager-gnome.h',
-  'soup-converter-wrapper.h',
-  'soup-body-input-stream.h',
-  'soup-body-output-stream.h',
-  'soup-client-input-stream.h',
-  'soup-content-processor.h',
-  'soup-content-sniffer-stream.h',
-  'soup-io-stream.h',
-  'soup-cache-input-stream.h',
-  'soup-filter-input-stream.h',
-  'soup-cookie-jar-sqlite.h',
-  'soup-requester.h',
-  'soup-misc-private.h',
-  'soup-proxy-uri-resolver.h',
-  'soup-proxy-resolver-wrapper.h',
-  'soup-proxy-uri-resolver.h',
-  'soup-cache-private.h',
-  'soup-cache-client-input-stream.h',
-  'soup-socket-private.h',
-  'soup-value-utils.h',
-  'soup-websocket-extension-manager-private.h',
-  'soup-xmlrpc-old.h'
+expand_content_md_files = [
+    'build-howto.md',
+    'client-basic.md',
+    'client-advanced.md',
+    'client-thread-safety.md',
+    'client-tls.md',
+    'server-howto.md',
+    'migrating-from-libsoup-2.md',
 ]
 
-mkdb_args = [
-  '--sgml-mode',
-  '--output-format=xml'
-]
+toml_data = configuration_data()
+toml_data.set('VERSION', meson.project_version())
 
-scan_args = [
-  '--deprecated-guards=SOUP_DISABLE_DEPRECATED',
-  '--rebuild-types',
-  '--ignore-decorators="SOUP_DEPRECATED\w*\s*()|SOUP_DEPRECATED\w*|SOUP_AVAILABLE[\w_]*"'
-]
-
-gnome.gtkdoc('libsoup-2.4',
-  main_sgml : 'libsoup-2.4-docs.sgml',
-  src_dir : srcdir,
-  ignore_headers : ignore_headers,
-  namespace : 'soup',
-  mkdb_args : mkdb_args,
-  scan_args : scan_args,
-  dependencies : libsoup_dep,
-  install : true,
-  content_files: [
-    'build-howto.xml',
-    'client-howto.xml',
-    'request-howto.xml',
-    'server-howto.xml',
-    'session-porting.xml',
-  ]
+gidocgen_dep = dependency('gi-docgen', version: '>= 2021.1',
+  fallback: ['gi-docgen', 'dummy_dep'],
+  native: true,
+  required: get_option('docs')
 )
+
+have_docs = gidocgen_dep.found()
+if not enable_introspection and get_option('docs').auto()
+  have_docs = false
+  warning('Documentation will not be built as introspection was disabled')
+elif not enable_introspection and get_option('docs').enabled()
+  error('Documentation cannot be built without introspection being enabled')
+endif
+
+if have_docs
+  libsoup_toml = configure_file(
+    input: 'libsoup.toml.in',
+    output: 'libsoup.toml',
+    configuration: toml_data
+  )
+
+  gidocgen = find_program('gi-docgen')
+
+  docs_dir = get_option('datadir') / 'doc'
+
+  custom_target('libsoup-doc',
+    input: [ libsoup_toml, soup_gir_gen_sources[0] ],
+    output: 'libsoup-@0@'.format(apiversion),
+    command: [
+      gidocgen,
+      'generate',
+      '--quiet',
+      '--add-include-path=@0@'.format(meson.current_build_dir() / '../../libsoup'),
+      '--config=@INPUT0@',
+      '--output-dir=@OUTPUT@',
+      '--no-namespace-dir',
+      '--content-dir=@0@'.format(meson.current_source_dir()),
+      '@INPUT1@',
+    ],
+    depend_files: [ expand_content_md_files ],
+    build_by_default: true,
+    install: true,
+    install_dir: docs_dir,
+  )
+
+  if get_option('doc_tests')
+    test('docs', gidocgen,
+      args: [
+        'check',
+        '--add-include-path=@0@'.format(meson.current_build_dir() / '../../libsoup'),
+        '--config=@0@'.format(libsoup_toml),
+        soup_gir_gen_sources[0],
+      ]
+    )
+  endif
+endif

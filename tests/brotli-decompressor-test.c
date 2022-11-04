@@ -19,7 +19,7 @@
  */
 
 #include "test-utils.h"
-#include "libsoup/soup-brotli-decompressor.h"
+#include "soup-brotli-decompressor.h"
 
 static void
 test_brotli (void)
@@ -53,6 +53,9 @@ test_brotli (void)
         } while (result == G_CONVERTER_CONVERTED);
 
         g_assert_cmpint (result, ==, G_CONVERTER_FINISHED);
+
+        /* NUL terminate data so we can cmpstr below. */
+        g_byte_array_append (out_bytes, (const guint8*)"\0", 1);
 
         g_free (contents);
         g_assert_true (g_file_get_contents (uncompressed_filename, &contents, &length, NULL));

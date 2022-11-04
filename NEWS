@@ -1,37 +1,214 @@
-Changes in libsoup from 2.74.0 to 2.74.1:
+Changes in libsoup from 3.1.4 to 3.2.0:
 
-	* Fix support for older versions of Vala [Rico Tzschichholz]
+Changes in libsoup from 3.1.3 to 3.1.4:
 
-	* Fix trying to build sysprof as a subproject on Windows [Christoph Reiter]
+* Numerous improvements to HTTP/2 reliablity [Carlos Garcia Campos]
+* Fix `http` proxy authentication with default proxy resolver [Carlos Garcia Campos]
+* Fix undefined ``ssize_t`` with MSVC [Patrick Griffis]
 
-	* Fix missing `extern "C"` in an installed header [Patrick Griffis]
+Changes in libsoup from 3.1.2 to 3.1.3:
 
-	* Improve `gssapi` dependency handling [Nirbheek Chauhan]
+* Fix compile error when `SOUP_VERSION_MAX_ALLOWED` is defined [Patrick Griffis]
 
-	* Fix `libsoup-doc` build target [Patrick Griffis]
+Changes in libsoup from 3.1.1 to 3.1.2:
 
-	* Updated translations: Danish, Russian
+* Replace HTTP/2 tests using Quart with internal HTTP/2 server tests [Carlos Garcia Campos]
+* Improve version macros including adding ability to define `SOUP_DISABLE_DEPRECATION_WARNINGS` [Emmanuele Bassi]
 
-Changes in libsoup from 2.72.0 to 2.74.0:
+Changes in libsoup from 3.0.7 to 3.1.1:
 
-	* IMPORTANT: Enable ssl-use-system-ca-file by default on deprecated
-	  Sync and Async sessions [Patrick Griffis]
-	  See here for details:
-	    https://gitlab.gnome.org/GNOME/libsoup/-/commit/71ca70a0f62cfc30dfacfd2ee0952a86e2e64055
+* Reintroduce some thread-safety to SoupSession (see https://libsoup.org/libsoup-3.0/client-thread-safety.html) [Carlos Garcia Campos]
+* Add SoupServerMessage:tls-peer-certificate and SoupServerMessage:tls-peer-certificate-errors [Ignacio Casal Quinteiro]
+* Port docs to gi-docgen [Maximiliano Sandoval R]
+* Update documentation [Patrick Griffis]
 
-	* Fix including headers in C++ projects [Patrick Griffis]
+Changes in libsoup from 3.0.6 to 3.0.7:
 
-	* Fix attempting to resolve relative paths with data URIs [Ryan Gonzalez]
+* Fix leak in SoupAuthNTLM [Milan Crha]
+* Fix constructing SoupAuthNTLM objects [Milan Crha]
+* Disable mutual negotiation in SoupAuthNegotiate [Michael Catanzaro]
+* http2: Do not advertise the `h2` protocool for proxy connections [Carlos Garcia Campos]
+* http2: Remove left-over headers when HTTP/1 redirects to HTTP/2 [Carlos Garcia Campos]
+* http2: Handle HTTP_1_1_REQUIRED error [Carlos Garcia Campos]
+* http2: Read request bodies synchronously for sync requests [Carlos Garcia Campos]
+* http2: Properly handle server sending shut down GOAWAY [Carlos Garcia Campos]
+* tests: Remove dependency on Apache's PHP module [Carlos Garcia Campos]
+* tests: Depend upon Apache's http2 module [Carlos Garcia Campos]
 
-	* Support Content-Disposition headers without a disposition-type [Patrick Griffis]
+Changes in libsoup from 3.0.5 to 3.0.6:
 
-	* Fix building VAPI bindings with latest Vala [Rico Tzschichholz]
+* Misc HTTP/2 fixes [Carlos Garcia Campos]
+* Add PUT/POST support to examples/get [Carlos Garcia Campos]
+* Add `--user-agent` option to examples/get [Carlos Garcia Campos]
+* Misc meson improvements [Nirbheek Chauhan]
+* Fix build with Visual Studio [Chun-wei Fan]
 
-	* Fix sending a Content-Length header in a response with status code of 1xx or 204
-	  [Ignacio Casal Quinteiro]
+Changes in libsoup from 3.0.4 to 3.0.5:
 
-	* Updated translations: Occitan, Persian, Nepali, Belarusian, Greek, British English,
-	                        Portuguese
+* Misc HTTP/2 fixes [Carlos Garcia Campos]
+* Fix missing files for installed-tests [Simon McVittie]
+* Fix SoupServer not properly handling invalid percent encoded paths [Ignacio Casal Quinteiro]
+* Fix other areas not properly handling invalid percent encoded paths [Patrick Griffis]
+* Fix SoupLogger:max-body-size of 0 meaning log nothing [Patrick Griffis]
+
+Changes in libsoup from 3.0.3 to 3.0.4:
+
+* Fix HTTP/2 not properly handling socket timeouts [Carlos Garcia Campos]
+* Improvements to test reliablity [Simon McVittie]
+* Fix cross-compiling to Windows [Melroy van den Berg]
+* Fix tests with development glib-networking [Patrick Griffis]
+* Expose soup_uri_copy() to Vala [Jens Georg]
+
+Changes in libsoup from 3.0.2 to 3.0.3:
+
+* Fix various HTTP/2 issues [Carlos Garcia Campos]
+
+* Error when libsoup2 has been loaded before libsoup3 [Patrick Griffis]
+
+* Fix memory leak when using TLS [Mart Raudsepp]
+
+Changes in libsoup from 3.0.1 to 3.0.2:
+
+* Add support for multiple auth challenges in one response [Patrick Griffis]
+
+* Fix SoupCache test failures on 32bit [Patrick Griffis]
+
+* Don't treat `-Wincompatible-pointer-types` as error
+  The `glib-mkenums` tool sometimes triggered this [Patrick Griffis]
+
+* Improve `gssapi` dependency handling [Nirbheek Chauhan]
+
+* Fix undefined `ssize_t` on Windows [Chun-wei Fan]
+
+* Updated translations: Hebrew
+
+Changes in libsoup from 3.0.0 to 3.0.1:
+
+* Move python overrides to upstream pygobject [Patrick Griffis]
+
+* Fix minor build warnings [Patrick Griffis]
+
+Changes in libsoup from 2.99.9 to 3.0.0:
+
+* Remove unused dependency on libxml [Patrick Griffis]
+
+* Use G_DECLARE_FINAL_TYPE when applicable and bump GLib dependency
+  to 2.69.1 [Patrick Griffis]
+
+* Add PyGObject overrides for SoupMessageHeaders to behave like a dict [Patrick Griffis]
+
+* Fix soup_message_add_status_code_handler() in Vala [Rico Tzschichholz]
+
+* Ensure that all header values are valid UTF-8, other encodings are not
+  supported [Patrick Griffis]
+
+* Support Content-Disposition headers missing a disposition-type [Patrick Griffis]
+
+Changes in libsoup from 2.99.8 to 2.99.9:
+
+    * Make soup_message_set_method() public API [Carlos Garcia Campos]
+
+    * Make SoupMessage:http-version read only [Carlos Garcia Campos]
+
+    * Prevent the same message being queued multiple times [Carlos Garcia Campos]
+
+    * Allow completing SoupMessage::tls-interaction with NULL certificate [Carlos Garcia Campos]
+
+    * Replace soup_server_set_ssl_cert_file() with soup_server_set_tls_certificate() [Carlos Garcia Campos]
+
+    * Add SoupServer support for client certificates [Carlos Garcia Campos]
+
+    * Fallback to building meson wrap of sqlite if not found [Xavier Claessens]
+
+    * Add soup_message_get_tls_protocol_version() and soup_message_get_tls_ciphersuite_name() API [Carlos Garcia Campos]
+
+Changes in libsoup from 2.99.7 to 2.99.8:
+
+    * Enable HTTP/2 by default. The SOUP_FORCE_HTTP1 env var can disable for debugging
+      [Carlos Garcia Campos]
+
+    * Restrict advertising brotli decoding support to HTTPS [Patrick Griffis]
+
+    * Add new API to handle client certificate authentication per-message as
+      well as API to PKCS #11 PINs [Carlos Garcia Campos, Patrick Griffis]
+
+    * Add new build features `http2_tests` and `pkcs11_tests` to more granularly control
+      optional test dependencies [Patrick Griffis]
+
+Changes in libsoup from 2.99.6 to 2.99.7:
+
+    * Change SoupSession to only support one SoupSessionFeature of a given type [Patrick Griffis]
+
+    * Remove soup_session_get_features() API [Patrick Griffis]
+
+    * Numerous HTTP/2 fixes and improvements [Carlos Garcia Campos]
+
+Changes in libsoup from 2.99.5 to 2.99.6:
+
+    * Added HTTP/2 support. Enable by setting `SOUP_ENABLE_HTTP2` env var. [Patrick Griffis, Carlos Garcia Campos]
+
+Changes in libsoup from 2.99.4 to 2.99.5:
+
+    * Add soup_message_get_remote_address() API [Carlos Garcia Campos]
+
+    * Fix preconnect stealing a connection [Carlos Garcia Campos]
+
+    * Fix potential header issues when included in a C++ project [Patrick Griffis]
+
+    * Disabling tests also disables Autobahn tests by default [Patrick Griffis]
+
+Changes in libsoup from 2.99.3 to 2.99.4:
+
+    * Rename SoupMessage:tls-certificate and SoupMessage:tls-certificate-errors
+      to tls-peer-certificate and tls-peer-certificate-errors respectively [Carlos Garcia Campos]
+
+    * Add SoupMessageMetrics API for tracking message events [Carlos Garcia Campos]
+
+    * Add soup_message_get_connection_id() API [Patrick Griffis]
+
+    * Add WebSocket fuzzing tests with Autobahn [Diego Pino]
+
+    * Windows build fixes [Chun-wei Fan]
+
+Changes in libsoup from 2.99.2 to 2.99.3:
+
+    * Fix soup_session_get_async_result_message() [Patrick Griffis]
+
+    * Fix SoupMessage not always emitting notify single on property change [Carlos Garcia Campos]
+
+    * Fix soup_message_query_flags() not returning a boolean [Patrick Griffis]
+
+    * Revert requiring a GPollableInputStream for request bodies [Carlos Garcia Campos]
+
+    * Rename soup_message_body_free() and soup_message_headers_free() to
+      soup_message_body_unref() and soup_message_headers_unref() [Carlos Garcia Campos]
+
+    * Rename SoupMessage:options-ping property to SoupMessage:is-options-ping and add
+      soup_message_new_options_ping(), soup_message_get_is_options_ping(), and
+      soup_message_set_is_options_ping() [Carlos Garcia Campos]
+
+    * Add SOUP_HTTP_2_0 SoupHTTPVersion to be used later [Patrick Griffis]
+
+Changes in libsoup from 2.99.1 to 2.99.2:
+
+    * Add new soup_session_send_and_read() API [Carlos Garcia Campos]
+
+    * Add soup_session_get_async_result_message() API [Carlos Garcia Campos]
+
+    * Remove soup_session_load_uri_bytes() and soup_session_read_uri() APIs [Carlos Garcia Campos]
+
+    * Add soup_session_preconnect_async() API [Carlos Garcia Campos]
+
+    * Add SoupSession:remote-connectable property to support proxying over unix sockets [Robert Ancell]
+
+    * Restore support to SoupLogger for logging message bodies [Daniel Kolesa]
+
+    * Update GLib dependency to 2.67.4
+
+Changes in libsoup from 2.72.0 to 2.99.1:
+
+    * This is a major ABI breaking release that can be installed in parallel with 2.7x.
+      Numerous API have been changed which is documented on https://libsoup.org
 
 Changes in libsoup from 2.71.1 to 2.72.0:
 

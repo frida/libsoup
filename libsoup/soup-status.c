@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-status.c: Status code descriptions
  *
@@ -13,26 +13,12 @@
 #include "soup.h"
 
 /**
- * SECTION:soup-status
- * @short_description: HTTP (and libsoup) status codes
- *
- **/
-
-/**
- * SOUP_STATUS_IS_TRANSPORT_ERROR:
- * @status: a status code
- *
- * Tests if @status is a libsoup transport error.
- *
- * Return value: %TRUE or %FALSE
- **/
-/**
  * SOUP_STATUS_IS_INFORMATIONAL:
  * @status: an HTTP status code
  *
  * Tests if @status is an Informational (1xx) response.
  *
- * Return value: %TRUE or %FALSE
+ * Returns: %TRUE or %FALSE
  **/
 /**
  * SOUP_STATUS_IS_SUCCESSFUL:
@@ -40,7 +26,7 @@
  *
  * Tests if @status is a Successful (2xx) response.
  *
- * Return value: %TRUE or %FALSE
+ * Returns: %TRUE or %FALSE
  **/
 /**
  * SOUP_STATUS_IS_REDIRECTION:
@@ -48,7 +34,7 @@
  *
  * Tests if @status is a Redirection (3xx) response.
  *
- * Return value: %TRUE or %FALSE
+ * Returns: %TRUE or %FALSE
  **/
 /**
  * SOUP_STATUS_IS_CLIENT_ERROR:
@@ -56,7 +42,7 @@
  *
  * Tests if @status is a Client Error (4xx) response.
  *
- * Return value: %TRUE or %FALSE
+ * Returns: %TRUE or %FALSE
  **/
 /**
  * SOUP_STATUS_IS_SERVER_ERROR:
@@ -64,25 +50,13 @@
  *
  * Tests if @status is a Server Error (5xx) response.
  *
- * Return value: %TRUE or %FALSE
+ * Returns: %TRUE or %FALSE
  **/
 
 /**
  * SoupStatus:
  * @SOUP_STATUS_NONE: No status available. (Eg, the message has not
  * been sent yet)
- * @SOUP_STATUS_CANCELLED: Message was cancelled locally
- * @SOUP_STATUS_CANT_RESOLVE: Unable to resolve destination host name
- * @SOUP_STATUS_CANT_RESOLVE_PROXY: Unable to resolve proxy host name
- * @SOUP_STATUS_CANT_CONNECT: Unable to connect to remote host
- * @SOUP_STATUS_CANT_CONNECT_PROXY: Unable to connect to proxy
- * @SOUP_STATUS_SSL_FAILED: SSL/TLS negotiation failed
- * @SOUP_STATUS_IO_ERROR: A network error occurred, or the other end
- * closed the connection unexpectedly
- * @SOUP_STATUS_MALFORMED: Malformed data (usually a programmer error)
- * @SOUP_STATUS_TRY_AGAIN: Used internally
- * @SOUP_STATUS_TOO_MANY_REDIRECTS: There were too many redirections
- * @SOUP_STATUS_TLS_FAILED: Used internally
  * @SOUP_STATUS_CONTINUE: 100 Continue (HTTP)
  * @SOUP_STATUS_SWITCHING_PROTOCOLS: 101 Switching Protocols (HTTP)
  * @SOUP_STATUS_PROCESSING: 102 Processing (WebDAV)
@@ -106,6 +80,7 @@
  * @SOUP_STATUS_USE_PROXY: 305 Use Proxy (HTTP)
  * @SOUP_STATUS_NOT_APPEARING_IN_THIS_PROTOCOL: 306 [Unused] (HTTP)
  * @SOUP_STATUS_TEMPORARY_REDIRECT: 307 Temporary Redirect (HTTP)
+ * @SOUP_STATUS_PERMANENT_REDIRECT: 308 Permanent Redirect (HTTP)
  * @SOUP_STATUS_BAD_REQUEST: 400 Bad Request (HTTP)
  * @SOUP_STATUS_UNAUTHORIZED: 401 Unauthorized (HTTP)
  * @SOUP_STATUS_PAYMENT_REQUIRED: 402 Payment Required (HTTP)
@@ -132,6 +107,7 @@
  * @SOUP_STATUS_INVALID_RANGE: shorter alias for
  * %SOUP_STATUS_REQUESTED_RANGE_NOT_SATISFIABLE
  * @SOUP_STATUS_EXPECTATION_FAILED: 417 Expectation Failed (HTTP)
+ * @SOUP_STATUS_MISDIRECTED_REQUEST: 421 Misdirected Request
  * @SOUP_STATUS_UNPROCESSABLE_ENTITY: 422 Unprocessable Entity
  * (WebDAV)
  * @SOUP_STATUS_LOCKED: 423 Locked (WebDAV)
@@ -154,10 +130,6 @@
  * Note that no libsoup functions take or return this type directly;
  * any function that works with status codes will accept unrecognized
  * status codes as well.
- *
- * Prior to 2.44 this type was called
- * <literal>SoupKnownStatusCode</literal>, but the individual values
- * have always had the names they have now.
  **/
 
 /* The reason_phrases are not localized because:
@@ -176,21 +148,11 @@ static const struct {
 	guint code;
 	const char *phrase;
 } reason_phrases [] = {
-	/* Transport errors */
-	{ SOUP_STATUS_CANCELLED,                  "Cancelled" },
-	{ SOUP_STATUS_CANT_RESOLVE,               "Cannot resolve hostname" },
-	{ SOUP_STATUS_CANT_RESOLVE_PROXY,         "Cannot resolve proxy hostname" },
-	{ SOUP_STATUS_CANT_CONNECT,               "Cannot connect to destination" },
-	{ SOUP_STATUS_CANT_CONNECT_PROXY,         "Cannot connect to proxy" },
-	{ SOUP_STATUS_SSL_FAILED,                 "SSL handshake failed" },
-	{ SOUP_STATUS_IO_ERROR,                   "Connection terminated unexpectedly" },
-	{ SOUP_STATUS_MALFORMED,                  "Message Corrupt" },
-	{ SOUP_STATUS_TOO_MANY_REDIRECTS,         "Too many redirects" },
-
 	/* Informational */
 	{ SOUP_STATUS_CONTINUE,                   "Continue" },
 	{ SOUP_STATUS_SWITCHING_PROTOCOLS,        "Switching Protocols" },
 	{ SOUP_STATUS_PROCESSING,                 "Processing" },
+        { 103,                                    "Early Hints" },
 
 	/* Success */
 	{ SOUP_STATUS_OK,                         "OK" },
@@ -210,6 +172,7 @@ static const struct {
 	{ SOUP_STATUS_NOT_MODIFIED,               "Not Modified" },
 	{ SOUP_STATUS_USE_PROXY,                  "Use Proxy" },
 	{ SOUP_STATUS_TEMPORARY_REDIRECT,         "Temporary Redirect" },
+        { SOUP_STATUS_PERMANENT_REDIRECT,         "Permanent Redirect" },
 
 	/* Client error */
 	{ SOUP_STATUS_BAD_REQUEST,                "Bad Request" },
@@ -251,21 +214,19 @@ static const struct {
  * soup_status_get_phrase:
  * @status_code: an HTTP status code
  *
- * Looks up the stock HTTP description of @status_code. This is used
- * by soup_message_set_status() to get the correct text to go with a
- * given status code.
+ * Looks up the stock HTTP description of @status_code.
  *
- * <emphasis>There is no reason for you to ever use this
- * function.</emphasis> If you wanted the textual description for the
- * #SoupMessage:status_code of a given #SoupMessage, you should just
- * look at the message's #SoupMessage:reason_phrase. However, you
+ * *There is no reason for you to ever use this
+ * function.* If you wanted the textual description for the
+ * [property@Message:status-code] of a given [class@Message], you should just
+ * look at the message's [property@Message:reason-phrase]. However, you
  * should only do that for use in debugging messages; HTTP reason
  * phrases are not localized, and are not generally very descriptive
  * anyway, and so they should never be presented to the user directly.
  * Instead, you should create you own error messages based on the
  * status code, and on what you were trying to do.
  *
- * Return value: the (terse, English) description of @status_code
+ * Returns: the (terse, English) description of @status_code
  **/
 const char *
 soup_status_get_phrase (guint status_code)
@@ -281,27 +242,10 @@ soup_status_get_phrase (guint status_code)
 }
 
 /**
- * soup_status_proxify:
- * @status_code: a status code
+ * SoupHTTPVersion:
+ * @SOUP_HTTP_1_0: HTTP 1.0 (RFC 1945)
+ * @SOUP_HTTP_1_1: HTTP 1.1 (RFC 2616)
+ * @SOUP_HTTP_2_0: HTTP 2.0 (RFC 7540)
  *
- * Turns %SOUP_STATUS_CANT_RESOLVE into
- * %SOUP_STATUS_CANT_RESOLVE_PROXY and %SOUP_STATUS_CANT_CONNECT into
- * %SOUP_STATUS_CANT_CONNECT_PROXY. Other status codes are passed
- * through unchanged.
- *
- * Return value: the "proxified" equivalent of @status_code.
- *
- * Since: 2.26
- **/
-guint
-soup_status_proxify (guint status_code)
-{
-	if (status_code == SOUP_STATUS_CANT_RESOLVE)
-		return SOUP_STATUS_CANT_RESOLVE_PROXY;
-	else if (status_code == SOUP_STATUS_CANT_CONNECT)
-		return SOUP_STATUS_CANT_CONNECT_PROXY;
-	else
-		return status_code;
-}
-
-G_DEFINE_QUARK (soup-http-error-quark, soup_http_error)
+ * Indicates the HTTP protocol version being used.
+ */

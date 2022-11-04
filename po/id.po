@@ -4,203 +4,222 @@
 #
 # Andika Triwidada <andika@gmail.com>, 2012, 2015.
 # Dirgita <dirgitadevina@yahoo.co.id>, 2012, 2013.
-# Kukuh Syafaat <kukuhsyafaat@gnome.org>, 2018, 2019.
+# Kukuh Syafaat <kukuhsyafaat@gnome.org>, 2018-2021.
 msgid ""
 msgstr ""
 "Project-Id-Version: libsoup master\n"
 "Report-Msgid-Bugs-To: https://gitlab.gnome.org/GNOME/libsoup/issues\n"
-"POT-Creation-Date: 2020-06-26 17:08+0000\n"
-"PO-Revision-Date: 2020-07-19 10:56+0700\n"
+"POT-Creation-Date: 2021-07-24 18:56+0000\n"
+"PO-Revision-Date: 2021-07-25 21:03+0700\n"
 "Last-Translator: Kukuh Syafaat <kukuhsyafaat@gnome.org>\n"
 "Language-Team: Indonesian <gnome@i15n.org>\n"
 "Language: id\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"X-Generator: Poedit 2.3.1\n"
+"X-Generator: Poedit 3.0\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: libsoup/soup-body-input-stream.c:139 libsoup/soup-body-input-stream.c:170
-#: libsoup/soup-body-input-stream.c:203 libsoup/soup-message-io.c:236
-msgid "Connection terminated unexpectedly"
-msgstr "Sambungan terputus secara tak diharapkan"
-
-#: libsoup/soup-body-input-stream.c:459
-msgid "Invalid seek request"
-msgstr "Permintaan seek yang tak valid"
-
-#: libsoup/soup-body-input-stream.c:487
-msgid "Cannot truncate SoupBodyInputStream"
-msgstr "Tak bisa memenggal SoupBodyInputStream"
-
-#: libsoup/soup-cache-input-stream.c:76
+#: libsoup/cache/soup-cache-input-stream.c:70
 msgid "Network stream unexpectedly closed"
 msgstr "Lalu lintas jaringan putus tak terduga"
 
-#: libsoup/soup-cache-input-stream.c:291
+#: libsoup/cache/soup-cache-input-stream.c:252
 msgid "Failed to completely cache the resource"
 msgstr "Gagal melengkapi tembolok sumber"
 
-#: libsoup/soup-directory-input-stream.c:231
-msgid "Name"
-msgstr "Nama"
-
-#: libsoup/soup-directory-input-stream.c:232
-msgid "Size"
-msgstr "Ukuran"
-
-#: libsoup/soup-directory-input-stream.c:233
-msgid "Date Modified"
-msgstr "Tanggal Diubah"
-
-#: libsoup/soup-converter-wrapper.c:189
+#: libsoup/content-decoder/soup-converter-wrapper.c:197
 #, c-format
 msgid "Output buffer is too small"
 msgstr "Penyangga keluaran terlalu kecil"
 
-#: libsoup/soup-message-client-io.c:39
-msgid "Could not parse HTTP response"
-msgstr "Tak bisa mengurai tanggapan HTTP"
+#: libsoup/http1/soup-body-input-stream.c:155
+#: libsoup/http1/soup-body-input-stream.c:187
+#: libsoup/http1/soup-body-input-stream.c:220
+#: libsoup/http1/soup-message-io-data.c:77
+msgid "Connection terminated unexpectedly"
+msgstr "Sambungan terputus secara tak diharapkan"
 
-#: libsoup/soup-message-client-io.c:62
-msgid "Unrecognized HTTP response encoding"
-msgstr "Enkode tanggapan HTTP tak dikenal"
+#: libsoup/http1/soup-body-input-stream.c:471
+msgid "Invalid seek request"
+msgstr "Permintaan seek yang tak valid"
 
-#: libsoup/soup-message-io.c:261
-msgid "Header too big"
-msgstr "Header terlalu besar"
+#: libsoup/http1/soup-body-input-stream.c:499
+msgid "Cannot truncate SoupBodyInputStream"
+msgstr "Tak bisa memenggal SoupBodyInputStream"
 
-#: libsoup/soup-message-io.c:393 libsoup/soup-message-io.c:1016
+#: libsoup/http1/soup-client-message-io-http1.c:312
+#: libsoup/http1/soup-client-message-io-http1.c:756
+#: libsoup/http2/soup-body-input-stream-http2.c:221
+#: libsoup/server/soup-server-io.c:363 libsoup/server/soup-server-io.c:828
 msgid "Operation would block"
 msgstr "Operasi akan memblokir"
 
-#: libsoup/soup-message-io.c:968 libsoup/soup-message-io.c:1001
+#: libsoup/http1/soup-client-message-io-http1.c:456
+msgid "Could not parse HTTP response"
+msgstr "Tak bisa mengurai tanggapan HTTP"
+
+#: libsoup/http1/soup-client-message-io-http1.c:479
+msgid "Unrecognized HTTP response encoding"
+msgstr "Enkode tanggapan HTTP tak dikenal"
+
+#: libsoup/http1/soup-client-message-io-http1.c:715
+#: libsoup/http1/soup-client-message-io-http1.c:741
+#: libsoup/http2/soup-client-message-io-http2.c:1456
+#: libsoup/http2/soup-client-message-io-http2.c:1480
 msgid "Operation was cancelled"
 msgstr "Operasi dibatalkan"
 
-#: libsoup/soup-message-server-io.c:63
-msgid "Could not parse HTTP request"
-msgstr "Tak bisa mengurai permintaan HTTP"
+#: libsoup/http1/soup-message-io-data.c:105
+msgid "Header too big"
+msgstr "Header terlalu besar"
 
-#: libsoup/soup-request.c:141
-#, c-format
-msgid "No URI provided"
-msgstr "URI tak diberikan"
-
-#: libsoup/soup-request.c:151
-#, c-format
-msgid "Invalid “%s” URI: %s"
-msgstr "URI \"%s\" tak valid: %s"
-
-#: libsoup/soup-server.c:1810
+#: libsoup/server/soup-server.c:1201
 msgid "Can’t create a TLS server without a TLS certificate"
 msgstr "Tak bisa membuat sebuah peladen TLS tanpa suatu sertifikat TLS"
 
-#: libsoup/soup-server.c:1827
+#: libsoup/server/soup-server.c:1223
 #, c-format
 msgid "Could not listen on address %s, port %d: "
 msgstr "Tak bisa mendengar pada alamat %s, port %d: "
 
-#: libsoup/soup-session.c:4570
-#, c-format
-msgid "Could not parse URI “%s”"
-msgstr "Tak bisa mengurai URI \"%s\""
-
-#: libsoup/soup-session.c:4607
-#, c-format
-msgid "Unsupported URI scheme “%s”"
-msgstr "Skema URI \"%s\" tak didukung"
-
-#: libsoup/soup-session.c:4629
-#, c-format
-msgid "Not an HTTP URI"
-msgstr "Bukan URI HTTP"
-
-#: libsoup/soup-session.c:4840
-msgid "The server did not accept the WebSocket handshake."
-msgstr "Peladen tak menerima jabat tangan WebSocket."
-
-#: libsoup/soup-socket.c:148
-msgid "Can’t import non-socket as SoupSocket"
-msgstr "Tak bisa mengimpor non-soket sebagai SoupSocket"
-
-#: libsoup/soup-socket.c:166
+#: libsoup/server/soup-socket.c:121
 msgid "Could not import existing socket: "
 msgstr "Tak bisa mengimpor soket yang telah ada: "
 
-#: libsoup/soup-socket.c:175
+#: libsoup/server/soup-socket.c:130
 msgid "Can’t import unconnected socket"
 msgstr "Tak bisa mengimpor soket yang tak tersambung"
 
-#: libsoup/soup-websocket.c:479 libsoup/soup-websocket.c:523
-#: libsoup/soup-websocket.c:539
+#: libsoup/soup-session.c:1166
+msgid "Location header is missing or empty in response headers"
+msgstr "Header lokasi hilang atau kosong di header respons"
+
+#: libsoup/soup-session.c:1180
+#, c-format
+msgid "Invalid URI “%s” in Location response header"
+msgstr "URI \"%s\" tidak valid di header respons Lokasi"
+
+#: libsoup/soup-session.c:1200
+msgid "Too many redirects"
+msgstr "Terlalu banyak pengalihan"
+
+#: libsoup/soup-session.c:1205
+msgid "Message was restarted too many times"
+msgstr "Pesan terlalu sering dimulai ulang"
+
+#: libsoup/soup-session.c:3317 libsoup/soup-session.c:3466
+msgid "Message is already in session queue"
+msgstr "Pesan sudah dalam antrean sesi"
+
+#: libsoup/soup-session.c:3827
+msgid "The server did not accept the WebSocket handshake."
+msgstr "Peladen tak menerima jabat tangan WebSocket."
+
+#: libsoup/soup-tld.c:142
+msgid "No public-suffix list available."
+msgstr "Tidak ada daftar sufiks publik yang tersedia."
+
+#: libsoup/soup-tld.c:152 libsoup/soup-tld.c:168
+msgid "Invalid hostname"
+msgstr "Nama host tak valid"
+
+#: libsoup/soup-tld.c:159
+msgid "Hostname is an IP address"
+msgstr "Nama host adalah suatu alamat IP"
+
+#: libsoup/soup-tld.c:180
+msgid "Hostname has no base domain"
+msgstr "Nama host tidak memiliki domain dasar"
+
+#: libsoup/soup-tld.c:188
+msgid "Not enough domains"
+msgstr "Tak cukup domain"
+
+#: libsoup/websocket/soup-websocket.c:399
+#: libsoup/websocket/soup-websocket.c:443
+#: libsoup/websocket/soup-websocket.c:459
 msgid "Server requested unsupported extension"
 msgstr "Peladen meminta ekstensi yang tak didukung"
 
-#: libsoup/soup-websocket.c:502 libsoup/soup-websocket.c:694
+#: libsoup/websocket/soup-websocket.c:422
+#: libsoup/websocket/soup-websocket.c:614
 #, c-format
 msgid "Incorrect WebSocket “%s” header"
 msgstr "Header WebSocket \"%s\" salah"
 
-#: libsoup/soup-websocket.c:503 libsoup/soup-websocket.c:1024
+#: libsoup/websocket/soup-websocket.c:423
+#: libsoup/websocket/soup-websocket.c:878
 #, c-format
 msgid "Server returned incorrect “%s” key"
 msgstr "Peladen mengembalikan kunci \"%s\" yang salah"
 
-#: libsoup/soup-websocket.c:566
+#: libsoup/websocket/soup-websocket.c:486
 #, c-format
 msgid "Duplicated parameter in “%s” WebSocket extension header"
 msgstr "Parameter duplikat dalam header ekstensi WebSocket \"%s\""
 
-#: libsoup/soup-websocket.c:567
+#: libsoup/websocket/soup-websocket.c:487
 #, c-format
 msgid "Server returned a duplicated parameter in “%s” WebSocket extension header"
 msgstr "Peladen mengembalikan parameter duplikat di header ekstensi WebSocket \"%s\""
 
-#: libsoup/soup-websocket.c:658 libsoup/soup-websocket.c:667
+#: libsoup/websocket/soup-websocket.c:577
+#: libsoup/websocket/soup-websocket.c:587
 msgid "WebSocket handshake expected"
 msgstr "Jabat tangan WebSocket diharapkan"
 
-#: libsoup/soup-websocket.c:675
+#: libsoup/websocket/soup-websocket.c:595
 msgid "Unsupported WebSocket version"
 msgstr "Versi WebSocket tak didukung"
 
-#: libsoup/soup-websocket.c:684
+#: libsoup/websocket/soup-websocket.c:604
 msgid "Invalid WebSocket key"
 msgstr "Kunci WebSocket tak valid"
 
-#: libsoup/soup-websocket.c:703
+#: libsoup/websocket/soup-websocket.c:623
 msgid "Unsupported WebSocket subprotocol"
 msgstr "Subprotokol WebSocket tak didukung"
 
-#: libsoup/soup-websocket.c:975
+#: libsoup/websocket/soup-websocket.c:829
 msgid "Server rejected WebSocket handshake"
 msgstr "Peladen menolak jabat tangan WebSocket"
 
-#: libsoup/soup-websocket.c:983 libsoup/soup-websocket.c:992
+#: libsoup/websocket/soup-websocket.c:837
+#: libsoup/websocket/soup-websocket.c:846
 msgid "Server ignored WebSocket handshake"
 msgstr "Peladen mengabaikan jabat tangan WebSocket"
 
-#: libsoup/soup-websocket.c:1004
+#: libsoup/websocket/soup-websocket.c:858
 msgid "Server requested unsupported protocol"
 msgstr "Peladen meminta protokol yang tak didukung"
 
-#: libsoup/soup-tld.c:150
-msgid "No public-suffix list available."
-msgstr "Tidak ada daftar sufiks publik yang tersedia."
+#~ msgid "Could not parse URI “%s”: %s"
+#~ msgstr "Tak bisa mengurai URI \"%s\": %s"
 
-#: libsoup/soup-tld.c:160 libsoup/soup-tld.c:176
-msgid "Invalid hostname"
-msgstr "Nama host tak valid"
+#~ msgid "Unsupported URI scheme “%s”"
+#~ msgstr "Skema URI \"%s\" tak didukung"
 
-#: libsoup/soup-tld.c:167
-msgid "Hostname is an IP address"
-msgstr "Nama host adalah suatu alamat IP"
+#~ msgid "Invalid “%s” URI: %s"
+#~ msgstr "URI \"%s\" tak valid: %s"
 
-#: libsoup/soup-tld.c:188
-msgid "Hostname has no base domain"
-msgstr "Nama host tidak memiliki domain dasar"
+#~ msgid "Name"
+#~ msgstr "Nama"
 
-#: libsoup/soup-tld.c:196
-msgid "Not enough domains"
-msgstr "Tak cukup domain"
+#~ msgid "Size"
+#~ msgstr "Ukuran"
+
+#~ msgid "Date Modified"
+#~ msgstr "Tanggal Diubah"
+
+#~ msgid "Could not parse HTTP request"
+#~ msgstr "Tak bisa mengurai permintaan HTTP"
+
+#~ msgid "No URI provided"
+#~ msgstr "URI tak diberikan"
+
+#~ msgid "Not an HTTP URI"
+#~ msgstr "Bukan URI HTTP"
+
+#~ msgid "Can’t import non-socket as SoupSocket"
+#~ msgstr "Tak bisa mengimpor non-soket sebagai SoupSocket"

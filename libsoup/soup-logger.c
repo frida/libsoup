@@ -1,4 +1,4 @@
-/* -*- Mode: C; tab-width: 8; indent-tabs-mode: t; c-basic-offset: 8 -*- */
+/* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 /*
  * soup-logger.c
  *
@@ -14,88 +14,87 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "soup-logger.h"
+#include "soup-logger-private.h"
+#include "soup-logger-input-stream.h"
 #include "soup-connection.h"
 #include "soup-message-private.h"
+#include "soup-misc.h"
 #include "soup.h"
+#include "soup-session-feature-private.h"
 
 /**
- * SECTION:soup-logger
- * @short_description: Debug logging support
+ * SoupLogger:
  *
- * #SoupLogger watches a #SoupSession and logs the HTTP traffic that
+ * Debug logging support
+ *
+ * #SoupLogger watches a [class@Session] and logs the HTTP traffic that
  * it generates, for debugging purposes. Many applications use an
  * environment variable to determine whether or not to use
  * #SoupLogger, and to determine the amount of debugging output.
  *
- * To use #SoupLogger, first create a logger with soup_logger_new(),
- * optionally configure it with soup_logger_set_request_filter(),
- * soup_logger_set_response_filter(), and soup_logger_set_printer(),
- * and then attach it to a session (or multiple sessions) with
- * soup_session_add_feature().
+ * To use #SoupLogger, first create a logger with [ctor@Logger.new], optionally
+ * configure it with [method@Logger.set_request_filter],
+ * [method@Logger.set_response_filter], and [method@Logger.set_printer], and
+ * then attach it to a session (or multiple sessions) with
+ * [method@Session.add_feature].
  *
- * By default, the debugging output is sent to
- * <literal>stdout</literal>, and looks something like:
+ * By default, the debugging output is sent to `stdout`, and looks something
+ * like:
  *
- * <informalexample><screen>
+ * ```
  * > POST /unauth HTTP/1.1
  * > Soup-Debug-Timestamp: 1200171744
- * > Soup-Debug: SoupSessionAsync 1 (0x612190), SoupMessage 1 (0x617000), SoupSocket 1 (0x612220)
+ * > Soup-Debug: SoupSession 1 (0x612190), SoupMessage 1 (0x617000), GSocket 1 (0x612220)
  * > Host: localhost
  * > Content-Type: text/plain
  * > Connection: close
- * >
- * > This is a test.
  *
  * &lt; HTTP/1.1 201 Created
  * &lt; Soup-Debug-Timestamp: 1200171744
  * &lt; Soup-Debug: SoupMessage 1 (0x617000)
  * &lt; Date: Sun, 12 Jan 2008 21:02:24 GMT
  * &lt; Content-Length: 0
- * </screen></informalexample>
+ * ```
  *
- * The <literal>Soup-Debug-Timestamp</literal> line gives the time (as
- * a <type>time_t</type>) when the request was sent, or the response fully
- * received.
+ * The `Soup-Debug-Timestamp` line gives the time (as a `time_t`) when the
+ * request was sent, or the response fully received.
  *
- * The <literal>Soup-Debug</literal> line gives further debugging
- * information about the #SoupSession, #SoupMessage, and #SoupSocket
- * involved; the hex numbers are the addresses of the objects in
- * question (which may be useful if you are running in a debugger).
- * The decimal IDs are simply counters that uniquely identify objects
- * across the lifetime of the #SoupLogger. In particular, this can be
- * used to identify when multiple messages are sent across the same
- * connection.
+ * The `Soup-Debug` line gives further debugging information about the
+ * [class@Session], [class@Message], and [class@Gio.Socket] involved; the hex
+ * numbers are the addresses of the objects in question (which may be useful if
+ * you are running in a debugger). The decimal IDs are simply counters that
+ * uniquely identify objects across the lifetime of the #SoupLogger. In
+ * particular, this can be used to identify when multiple messages are sent
+ * across the same connection.
  *
  * Currently, the request half of the message is logged just before
  * the first byte of the request gets written to the network (from the
- * #SoupMessage::starting signal), which means that if you have
- * not made the complete request body available at that point, it will
- * not be logged.
+ * [signal@Message::starting] signal).
  *
- * The response is logged just after the last byte of the response
- * body is read from the network (from the #SoupMessage::got_body or
- * #SoupMessage::got_informational signal), which means that the
- * #SoupMessage::got_headers signal, and anything triggered off it
- * (such as #SoupSession::authenticate) will be emitted
- * <emphasis>before</emphasis> the response headers are actually
- * logged.
+ * The response is logged just after the last byte of the response body is read
+ * from the network (from the [signal@Message::got-body] or
+ * [signal@Message::got-informational] signal), which means that the
+ * [signal@Message::got-headers] signal, and anything triggered off it (such as
+ * #SoupMessage::authenticate) will be emitted *before* the response headers are
+ * actually logged.
  *
- * If the response doesn't happen to trigger the
- * #SoupMessage::got_body nor #SoupMessage::got_informational signals
- * due to, for example, a cancellation before receiving the last byte
- * of the response body, the response will still be logged on the
- * event of the #SoupMessage::finished signal.
+ * If the response doesn't happen to trigger the [signal@Message::got-body] nor
+ * [signal@Message::got-informational] signals due to, for example, a
+ * cancellation before receiving the last byte of the response body, the
+ * response will still be logged on the event of the [signal@Message::finished]
+ * signal.
  **/
 
-typedef struct {
-	/* We use a mutex so that if requests are being run in
-	 * multiple threads, we don't mix up the output.
-	 */
-	GMutex             lock;
+struct _SoupLogger {
+	GObject parent;
+};
 
+typedef struct {
 	GQuark              tag;
+        GMutex              mutex;
 	GHashTable         *ids;
+	GHashTable         *request_bodies;
+	GHashTable         *response_bodies;
 
 	SoupSession        *session;
 	SoupLoggerLogLevel  level;
@@ -120,25 +119,135 @@ enum {
 	PROP_LEVEL,
 	PROP_MAX_BODY_SIZE,
 
-	LAST_PROP
+	LAST_PROPERTY
 };
 
-static SoupSessionFeatureInterface *soup_logger_default_feature_interface;
+static GParamSpec *properties[LAST_PROPERTY] = { NULL, };
+
 static void soup_logger_session_feature_init (SoupSessionFeatureInterface *feature_interface, gpointer interface_data);
 
-G_DEFINE_TYPE_WITH_CODE (SoupLogger, soup_logger, G_TYPE_OBJECT,
-                         G_ADD_PRIVATE (SoupLogger)
-			 G_IMPLEMENT_INTERFACE (SOUP_TYPE_SESSION_FEATURE,
-						soup_logger_session_feature_init))
+static SoupContentProcessorInterface *soup_logger_default_content_processor_interface;
+static void soup_logger_content_processor_init (SoupContentProcessorInterface *interface, gpointer interface_data);
+
+G_DEFINE_FINAL_TYPE_WITH_CODE (SoupLogger, soup_logger, G_TYPE_OBJECT,
+                               G_ADD_PRIVATE (SoupLogger)
+                               G_IMPLEMENT_INTERFACE (SOUP_TYPE_SESSION_FEATURE,
+                                                      soup_logger_session_feature_init)
+                               G_IMPLEMENT_INTERFACE (SOUP_TYPE_CONTENT_PROCESSOR,
+                                                      soup_logger_content_processor_init))
+
+static void
+write_body (SoupLogger *logger, const char *buffer, gsize nread,
+            gpointer key, GHashTable *bodies)
+{
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+        GString *body;
+
+        if (!nread)
+                return;
+
+        g_mutex_lock (&priv->mutex);
+        body = g_hash_table_lookup (bodies, key);
+
+        if (!body) {
+            body = g_string_new (NULL);
+            g_hash_table_insert (bodies, key, body);
+        }
+        g_mutex_unlock (&priv->mutex);
+
+        if (priv->max_body_size >= 0) {
+                /* longer than max => we've written the extra [...] */
+                if (body->len > priv->max_body_size)
+                        return;
+                int cap = priv->max_body_size - body->len;
+                if (cap > 0)
+                        g_string_append_len (body, buffer, MIN (nread, cap));
+                if (nread > cap)
+                        g_string_append (body, "\n[...]");
+        } else {
+                g_string_append_len (body, buffer, nread);
+        }
+}
+
+void
+soup_logger_log_request_data (SoupLogger *logger, SoupMessage *msg, const char *buffer, gsize len)
+{
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+
+        write_body (logger, buffer, len, msg, priv->request_bodies);
+}
+
+static void
+write_response_body (SoupLoggerInputStream *stream, char *buffer, gsize nread,
+                     gpointer user_data)
+{
+        SoupLogger *logger = soup_logger_input_stream_get_logger (stream);
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+
+        write_body (logger, buffer, nread, user_data, priv->response_bodies);
+}
+
+static GInputStream *
+soup_logger_content_processor_wrap_input (SoupContentProcessor *processor,
+                            GInputStream *base_stream,
+                            SoupMessage *msg,
+                            GError **error)
+{
+        SoupLogger *logger = SOUP_LOGGER (processor);
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+        SoupLoggerInputStream *stream;
+        SoupLoggerLogLevel log_level;
+
+        if (priv->request_filter)
+                log_level = priv->request_filter (logger, msg,
+                                                  priv->response_filter_data);
+        else
+                log_level = priv->level;
+
+        if (log_level < SOUP_LOGGER_LOG_BODY)
+                return NULL;
+
+        stream = g_object_new (SOUP_TYPE_LOGGER_INPUT_STREAM,
+                               "base-stream", base_stream,
+                               "logger", logger,
+                               NULL);
+
+        g_signal_connect_object (stream, "read-data",
+                                 G_CALLBACK (write_response_body), msg, 0);
+
+        return G_INPUT_STREAM (stream);
+}
+
+static void
+soup_logger_content_processor_init (SoupContentProcessorInterface *interface,
+                                    gpointer interface_data)
+{
+        soup_logger_default_content_processor_interface =
+                g_type_default_interface_peek (SOUP_TYPE_CONTENT_PROCESSOR);
+
+        interface->processing_stage = SOUP_STAGE_BODY_DATA;
+        interface->wrap_input = soup_logger_content_processor_wrap_input;
+}
+
+static void
+body_free (gpointer str)
+{
+        g_string_free (str, TRUE);
+}
 
 static void
 soup_logger_init (SoupLogger *logger)
 {
 	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+	char *id;
 
-	g_mutex_init (&priv->lock);
-	priv->tag = g_quark_from_static_string (g_strdup_printf ("SoupLogger-%p", logger));
+	id = g_strdup_printf ("SoupLogger-%p", logger);
+	priv->tag = g_quark_from_string (id);
+	g_free (id);
 	priv->ids = g_hash_table_new (NULL, NULL);
+	priv->request_bodies = g_hash_table_new_full (NULL, NULL, NULL, body_free);
+	priv->response_bodies = g_hash_table_new_full (NULL, NULL, NULL, body_free);
+        g_mutex_init (&priv->mutex);
 }
 
 static void
@@ -148,6 +257,8 @@ soup_logger_finalize (GObject *object)
 	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
 
 	g_hash_table_destroy (priv->ids);
+	g_hash_table_destroy (priv->request_bodies);
+	g_hash_table_destroy (priv->response_bodies);
 
 	if (priv->request_filter_dnotify)
 		priv->request_filter_dnotify (priv->request_filter_data);
@@ -156,7 +267,7 @@ soup_logger_finalize (GObject *object)
 	if (priv->printer_dnotify)
 		priv->printer_dnotify (priv->printer_data);
 
-	g_mutex_clear (&priv->lock);
+        g_mutex_clear (&priv->mutex);
 
 	G_OBJECT_CLASS (soup_logger_parent_class)->finalize (object);
 }
@@ -214,63 +325,44 @@ soup_logger_class_init (SoupLoggerClass *logger_class)
 	/**
 	 * SoupLogger:level:
 	 *
-	 * The level of logging output
-	 *
-	 * Since: 2.56
+	 * The level of logging output.
 	 */
-	/**
-	 * SOUP_LOGGER_LEVEL:
-	 *
-	 * Alias for the #SoupLogger:level property, qv.
-	 *
-	 * Since: 2.56
-	 **/
-	g_object_class_install_property (
-		object_class, PROP_LEVEL,
-		g_param_spec_enum (SOUP_LOGGER_LEVEL,
+        properties[PROP_LEVEL] =
+		g_param_spec_enum ("level",
 				    "Level",
 				    "The level of logging output",
 				    SOUP_TYPE_LOGGER_LOG_LEVEL,
 				    SOUP_LOGGER_LOG_MINIMAL,
 				    G_PARAM_READWRITE |
-				    G_PARAM_STATIC_STRINGS));
-
+				    G_PARAM_STATIC_STRINGS);
 	/**
-	 * SoupLogger:max-body-size:
+	 * SoupLogger:max-body-size: (attributes org.gtk.Property.get=soup_logger_get_max_body_size org.gtk.Property.set=soup_logger_set_max_body_size)
 	 *
-	 * If #SoupLogger:level is %SOUP_LOGGER_LOG_BODY, this gives
+	 * If [property@Logger:level] is %SOUP_LOGGER_LOG_BODY, this gives
 	 * the maximum number of bytes of the body that will be logged.
 	 * (-1 means "no limit".)
-	 *
-	 * Since: 2.56
-	 */
-	/**
-	 * SOUP_LOGGER_MAX_BODY_SIZE:
-	 *
-	 * Alias for the #SoupLogger:max-body-size property, qv.
-	 *
-	 * Since: 2.56
 	 **/
-	g_object_class_install_property (
-		object_class, PROP_MAX_BODY_SIZE,
-		g_param_spec_int (SOUP_LOGGER_MAX_BODY_SIZE,
+        properties[PROP_MAX_BODY_SIZE] =
+		g_param_spec_int ("max-body-size",
 				    "Max Body Size",
 				    "The maximum body size to output",
 				    -1,
 				    G_MAXINT,
 				    -1,
+				    G_PARAM_CONSTRUCT |
 				    G_PARAM_READWRITE |
-				    G_PARAM_STATIC_STRINGS));
+				    G_PARAM_STATIC_STRINGS);
+
+        g_object_class_install_properties (object_class, LAST_PROPERTY, properties);
 }
 
 /**
  * SoupLoggerLogLevel:
  * @SOUP_LOGGER_LOG_NONE: No logging
  * @SOUP_LOGGER_LOG_MINIMAL: Log the Request-Line or Status-Line and
- * the Soup-Debug pseudo-headers
+ *   the Soup-Debug pseudo-headers
  * @SOUP_LOGGER_LOG_HEADERS: Log the full request/response headers
- * @SOUP_LOGGER_LOG_BODY: Log the full headers and request/response
- * bodies.
+ * @SOUP_LOGGER_LOG_BODY: Log the full headers and request/response bodies
  *
  * Describes the level of logging output to provide.
  **/
@@ -278,42 +370,36 @@ soup_logger_class_init (SoupLoggerClass *logger_class)
 /**
  * soup_logger_new:
  * @level: the debug level
- * @max_body_size: the maximum body size to output, or -1
  *
- * Creates a new #SoupLogger with the given debug level. If @level is
- * %SOUP_LOGGER_LOG_BODY, @max_body_size gives the maximum number of
- * bytes of the body that will be logged. (-1 means "no limit".)
+ * Creates a new #SoupLogger with the given debug level.
  *
  * If you need finer control over what message parts are and aren't
- * logged, use soup_logger_set_request_filter() and
- * soup_logger_set_response_filter().
+ * logged, use [method@Logger.set_request_filter] and
+ * [method@Logger.set_response_filter].
  *
  * Returns: a new #SoupLogger
  **/
 SoupLogger *
-soup_logger_new (SoupLoggerLogLevel level, int max_body_size)
+soup_logger_new (SoupLoggerLogLevel level)
 {
-	return g_object_new (SOUP_TYPE_LOGGER,
-			     SOUP_LOGGER_LEVEL, level,
-			     SOUP_LOGGER_MAX_BODY_SIZE, max_body_size,
-			     NULL);
+	return g_object_new (SOUP_TYPE_LOGGER, "level", level, NULL);
 }
 
 /**
  * SoupLoggerFilter:
  * @logger: the #SoupLogger
  * @msg: the message being logged
- * @user_data: the data passed to soup_logger_set_request_filter()
- * or soup_logger_set_response_filter()
+ * @user_data: the data passed to [method@Logger.set_request_filter]
+ *   or [method@Logger.set_response_filter]
  *
- * The prototype for a logging filter. The filter callback will be
- * invoked for each request or response, and should analyze it and
- * return a #SoupLoggerLogLevel value indicating how much of the
- * message to log. Eg, it might choose between %SOUP_LOGGER_LOG_BODY
- * and %SOUP_LOGGER_LOG_HEADERS depending on the Content-Type.
+ * The prototype for a logging filter.
  *
- * Return value: a #SoupLoggerLogLevel value indicating how much of
- * the message to log
+ * The filter callback will be invoked for each request or response, and should
+ * analyze it and return a [enum@LoggerLogLevel] value indicating how much of
+ * the message to log.
+ *
+ * Returns: a [enum@LoggerLogLevel] value indicating how much of the message to
+ *   log
  **/
 
 /**
@@ -324,10 +410,11 @@ soup_logger_new (SoupLoggerLogLevel level, int max_body_size)
  * @destroy: a #GDestroyNotify to free @filter_data
  *
  * Sets up a filter to determine the log level for a given request.
+ *
  * For each HTTP request @logger will invoke @request_filter to
  * determine how much (if any) of that request to log. (If you do not
  * set a request filter, @logger will just always log requests at the
- * level passed to soup_logger_new().)
+ * level passed to [ctor@Logger.new].)
  **/
 void
 soup_logger_set_request_filter (SoupLogger       *logger,
@@ -350,10 +437,11 @@ soup_logger_set_request_filter (SoupLogger       *logger,
  * @destroy: a #GDestroyNotify to free @filter_data
  *
  * Sets up a filter to determine the log level for a given response.
+ *
  * For each HTTP response @logger will invoke @response_filter to
  * determine how much (if any) of that response to log. (If you do not
  * set a response filter, @logger will just always log responses at
- * the level passed to soup_logger_new().)
+ * the level passed to [ctor@Logger.new].)
  **/
 void
 soup_logger_set_response_filter (SoupLogger       *logger,
@@ -374,7 +462,7 @@ soup_logger_set_response_filter (SoupLogger       *logger,
  * @level: the level of the information being printed.
  * @direction: a single-character prefix to @data
  * @data: data to print
- * @user_data: the data passed to soup_logger_set_printer()
+ * @user_data: the data passed to [method@Logger.set_printer]
  *
  * The prototype for a custom printing callback.
  *
@@ -386,9 +474,9 @@ soup_logger_set_response_filter (SoupLogger       *logger,
  *
  * To get the effect of the default printer, you would do:
  *
- * <informalexample><programlisting>
- *	printf ("%c %s\n", direction, data);
- * </programlisting></informalexample>
+ * ```c
+ * printf ("%c %s\n", direction, data);
+ * ```
  **/
 
 /**
@@ -399,7 +487,7 @@ soup_logger_set_response_filter (SoupLogger       *logger,
  * @destroy: a #GDestroyNotify to free @printer_data
  *
  * Sets up an alternate log printing routine, if you don't want
- * the log to go to <literal>stdout</literal>.
+ * the log to go to `stdout`.
  **/
 void
 soup_logger_set_printer (SoupLogger        *logger,
@@ -412,6 +500,37 @@ soup_logger_set_printer (SoupLogger        *logger,
 	priv->printer         = printer;
 	priv->printer_data    = printer_data;
 	priv->printer_dnotify = destroy;
+}
+
+/**
+ * soup_logger_set_max_body_size: (attributes org.gtk.Method.set_property=max-body-size)
+ * @logger: a #SoupLogger
+ * @max_body_size: the maximum body size to log
+ *
+ * Sets the maximum body size for @logger (-1 means no limit).
+ **/
+void
+soup_logger_set_max_body_size (SoupLogger *logger, int max_body_size)
+{
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+
+        priv->max_body_size = max_body_size;
+}
+
+/**
+ * soup_logger_get_max_body_size: (attributes org.gtk.Method.get_property=max-body-size)
+ * @logger: a #SoupLogger
+ *
+ * Get the maximum body size for @logger.
+ *
+ * Returns: the maximum body size, or -1 if unlimited
+ **/
+int
+soup_logger_get_max_body_size (SoupLogger *logger)
+{
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+
+        return priv->max_body_size;
 }
 
 static guint
@@ -429,49 +548,14 @@ soup_logger_set_id (SoupLogger *logger, gpointer object)
 	gpointer klass = G_OBJECT_GET_CLASS (object);
 	gpointer id;
 
+        g_mutex_lock (&priv->mutex);
 	id = g_hash_table_lookup (priv->ids, klass);
 	id = (char *)id + 1;
 	g_hash_table_insert (priv->ids, klass, id);
+        g_mutex_unlock (&priv->mutex);
 
 	g_object_set_qdata (object, priv->tag, id);
 	return GPOINTER_TO_UINT (id);
-}
-
-/**
- * soup_logger_attach:
- * @logger: a #SoupLogger
- * @session: a #SoupSession
- *
- * Sets @logger to watch @session and print debug information for
- * its messages.
- *
- * (The session will take a reference on @logger, which will be
- * removed when you call soup_logger_detach(), or when the session is
- * destroyed.)
- *
- * Deprecated: Use soup_session_add_feature() instead.
- **/
-void
-soup_logger_attach (SoupLogger  *logger,
-		    SoupSession *session)
-{
-	soup_session_add_feature (session, SOUP_SESSION_FEATURE (logger));
-}
-
-/**
- * soup_logger_detach:
- * @logger: a #SoupLogger
- * @session: a #SoupSession
- *
- * Stops @logger from watching @session.
- *
- * Deprecated: Use soup_session_remove_feature() instead.
- **/
-void
-soup_logger_detach (SoupLogger  *logger,
-		    SoupSession *session)
-{
-	soup_session_remove_feature (session, SOUP_SESSION_FEATURE (logger));
 }
 
 static void soup_logger_print (SoupLogger *logger, SoupLoggerLogLevel level,
@@ -488,11 +572,6 @@ soup_logger_print (SoupLogger *logger, SoupLoggerLogLevel level,
 	va_start (args, format);
 	data = g_strdup_vprintf (format, args);
 	va_end (args);
-
-	if (level == SOUP_LOGGER_LOG_BODY && priv->max_body_size > 0) {
-		if (strlen (data) > priv->max_body_size + 6)
-			strcpy (data + priv->max_body_size, "\n[...]");
-	}
 
 	line = data;
 	do {
@@ -543,14 +622,15 @@ soup_logger_print_basic_auth (SoupLogger *logger, const char *value)
 
 static void
 print_request (SoupLogger *logger, SoupMessage *msg,
-	       SoupSocket *socket, gboolean restarted)
+	       GSocket *socket, gboolean restarted)
 {
 	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
 	SoupLoggerLogLevel log_level;
 	SoupMessageHeadersIter iter;
 	const char *name, *value;
 	char *socket_dbg;
-	SoupURI *uri;
+	GString *body;
+	GUri *uri;
 
 	if (priv->request_filter) {
 		log_level = priv->request_filter (logger, msg,
@@ -562,18 +642,19 @@ print_request (SoupLogger *logger, SoupMessage *msg,
 		return;
 
 	uri = soup_message_get_uri (msg);
-	if (msg->method == SOUP_METHOD_CONNECT) {
+	if (soup_message_get_method (msg) == SOUP_METHOD_CONNECT) {
 		soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '>',
-				   "CONNECT %s:%u HTTP/1.%d",
-				   uri->host, uri->port,
-				   soup_message_get_http_version (msg));
+				   "CONNECT %s:%u HTTP/%s",
+				   g_uri_get_host (uri), g_uri_get_port (uri),
+				   soup_http_version_to_string (soup_message_get_http_version (msg)));
 	} else {
 		soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '>',
-				   "%s %s%s%s HTTP/1.%d",
-				   msg->method, uri->path,
-				   uri->query ? "?" : "",
-				   uri->query ? uri->query : "",
-				   soup_message_get_http_version (msg));
+				   "%s %s%s%s HTTP/%s",
+				   soup_message_get_method (msg),
+                                   g_uri_get_path (uri),
+				   g_uri_get_query (uri) ? "?" : "",
+				   g_uri_get_query (uri) ? g_uri_get_query (uri) : "",
+				   soup_http_version_to_string (soup_message_get_http_version (msg)));
 	}
 
 	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '>',
@@ -599,25 +680,7 @@ print_request (SoupLogger *logger, SoupMessage *msg,
 	if (log_level == SOUP_LOGGER_LOG_MINIMAL)
 		return;
 
-	if (!soup_message_headers_get_one (msg->request_headers, "Host")) {
-		char *uri_host;
-
-		if (strchr (uri->host, ':'))
-			uri_host = g_strdup_printf ("[%s]", uri->host);
-		else if (g_hostname_is_non_ascii (uri->host))
-			uri_host = g_hostname_to_ascii (uri->host);
-		else
-			uri_host = uri->host;
-
-		soup_logger_print (logger, SOUP_LOGGER_LOG_HEADERS, '>',
-				   "Host: %s%c%u", uri_host,
-				   soup_uri_uses_default_port (uri) ? '\0' : ':',
-				   uri->port);
-
-		if (uri_host != uri->host)
-			g_free (uri_host);
-	}
-	soup_message_headers_iter_init (&iter, msg->request_headers);
+	soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
 	while (soup_message_headers_iter_next (&iter, &name, &value)) {
 		if (!g_ascii_strcasecmp (name, "Authorization") &&
 		    !g_ascii_strncasecmp (value, "Basic ", 6))
@@ -627,22 +690,19 @@ print_request (SoupLogger *logger, SoupMessage *msg,
 					   "%s: %s", name, value);
 		}
 	}
+
 	if (log_level == SOUP_LOGGER_LOG_HEADERS)
 		return;
 
-	if (msg->request_body->length &&
-	    soup_message_body_get_accumulate (msg->request_body)) {
-		SoupBuffer *request;
+	/* will be logged in get_informational */
+	if (soup_message_headers_get_expectations (soup_message_get_request_headers (msg)) == SOUP_EXPECTATION_CONTINUE)
+		return;
 
-		request = soup_message_body_flatten (msg->request_body);
-		g_return_if_fail (request != NULL);
-		soup_buffer_free (request);
+	if (!g_hash_table_steal_extended (priv->request_bodies, msg, NULL, (gpointer *)&body))
+		return;
 
-		if (soup_message_headers_get_expectations (msg->request_headers) != SOUP_EXPECTATION_CONTINUE) {
-			soup_logger_print (logger, SOUP_LOGGER_LOG_BODY, '>',
-					   "\n%s", msg->request_body->data);
-		}
-	}
+	soup_logger_print (logger, SOUP_LOGGER_LOG_BODY, '>', "\n%s", body->str);
+	g_string_free (body, TRUE);
 }
 
 static void
@@ -652,6 +712,7 @@ print_response (SoupLogger *logger, SoupMessage *msg)
 	SoupLoggerLogLevel log_level;
 	SoupMessageHeadersIter iter;
 	const char *name, *value;
+	GString *body;
 
 	if (priv->response_filter) {
 		log_level = priv->response_filter (logger, msg,
@@ -663,9 +724,9 @@ print_response (SoupLogger *logger, SoupMessage *msg)
 		return;
 
 	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '<',
-			   "HTTP/1.%d %u %s\n",
-			   soup_message_get_http_version (msg),
-			   msg->status_code, msg->reason_phrase);
+			   "HTTP/%s %u %s\n",
+			   soup_http_version_to_string (soup_message_get_http_version (msg)),
+			   soup_message_get_status (msg), soup_message_get_reason_phrase (msg));
 
 	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '<',
 			   "Soup-Debug-Timestamp: %lu",
@@ -678,93 +739,107 @@ print_response (SoupLogger *logger, SoupMessage *msg)
 	if (log_level == SOUP_LOGGER_LOG_MINIMAL)
 		return;
 
-	soup_message_headers_iter_init (&iter, msg->response_headers);
+	soup_message_headers_iter_init (&iter, soup_message_get_response_headers (msg));
 	while (soup_message_headers_iter_next (&iter, &name, &value)) {
 		soup_logger_print (logger, SOUP_LOGGER_LOG_HEADERS, '<',
 				   "%s: %s", name, value);
 	}
+
 	if (log_level == SOUP_LOGGER_LOG_HEADERS)
 		return;
 
-	if (msg->response_body->data) {
-		soup_logger_print (logger, SOUP_LOGGER_LOG_BODY, '<',
-				   "\n%s", msg->response_body->data);
-	}
+	if (!g_hash_table_steal_extended (priv->response_bodies, msg, NULL, (gpointer *)&body))
+		return;
+
+	soup_logger_print (logger, SOUP_LOGGER_LOG_BODY, '<', "\n%s", body->str);
+	g_string_free (body, TRUE);
 }
 
 static void
 finished (SoupMessage *msg, gpointer user_data)
 {
 	SoupLogger *logger = user_data;
-	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
 
-	g_mutex_lock (&priv->lock);
+        /* Do not print the response if we didn't print a request. This can happen if
+         * msg is a preconnect request, for example.
+         */
+        if (!soup_logger_get_id (logger, msg))
+                return;
 
+        g_mutex_lock (&priv->mutex);
 	print_response (logger, msg);
 	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
-
-	g_mutex_unlock (&priv->lock);
+        g_mutex_unlock (&priv->mutex);
 }
 
 static void
 got_informational (SoupMessage *msg, gpointer user_data)
 {
-	SoupLogger *logger = user_data;
-	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+        SoupLogger *logger = user_data;
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+        SoupLoggerLogLevel log_level;
+        GString *body = NULL;
 
-	g_mutex_lock (&priv->lock);
+        g_mutex_lock (&priv->mutex);
 
-	g_signal_handlers_disconnect_by_func (msg, finished, logger);
-	print_response (logger, msg);
-	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
+        if (priv->response_filter)
+                log_level = priv->response_filter (logger, msg,
+                                                   priv->response_filter_data);
+        else
+                log_level = priv->level;
 
-	if (msg->status_code == SOUP_STATUS_CONTINUE && msg->request_body->data) {
-		SoupLoggerLogLevel log_level;
+        g_signal_handlers_disconnect_by_func (msg, finished, logger);
+        print_response (logger, msg);
+        soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
 
-		soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '>',
-				   "[Now sending request body...]");
+        if (!g_hash_table_steal_extended (priv->response_bodies, msg, NULL, (gpointer *)&body)) {
+                g_mutex_unlock (&priv->mutex);
+                return;
+        }
 
-		if (priv->request_filter) {
-			log_level = priv->request_filter (logger, msg,
-							  priv->request_filter_data);
-		} else
-			log_level = priv->level;
+        if (soup_message_get_status (msg) == SOUP_STATUS_CONTINUE) {
+                soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '>',
+                                   "[Now sending request body...]");
 
-		if (log_level == SOUP_LOGGER_LOG_BODY) {
-			soup_logger_print (logger, SOUP_LOGGER_LOG_BODY, '>',
-					   "%s", msg->request_body->data);
-		}
+                if (log_level == SOUP_LOGGER_LOG_BODY) {
+                        soup_logger_print (logger, SOUP_LOGGER_LOG_BODY,
+                                           '>', "%s", body->str);
+                }
 
-		soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
-	}
+                soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
+        }
 
-	g_mutex_unlock (&priv->lock);
+        g_string_free (body, TRUE);
+
+        g_mutex_unlock (&priv->mutex);
 }
 
 static void
 got_body (SoupMessage *msg, gpointer user_data)
 {
 	SoupLogger *logger = user_data;
-	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
 
-	g_mutex_lock (&priv->lock);
+        g_mutex_lock (&priv->mutex);
 
 	g_signal_handlers_disconnect_by_func (msg, finished, logger);
+
 	print_response (logger, msg);
 	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
 
-	g_mutex_unlock (&priv->lock);
+        g_mutex_unlock (&priv->mutex);
 }
 
 static void
-starting (SoupMessage *msg, gpointer user_data)
+wrote_body (SoupMessage *msg, gpointer user_data)
 {
 	SoupLogger *logger = SOUP_LOGGER (user_data);
 	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
 	gboolean restarted;
 	guint msg_id;
 	SoupConnection *conn;
-	SoupSocket *socket;
+	GSocket *socket = NULL;
 
 	msg_id = soup_logger_get_id (logger, msg);
 	if (msg_id)
@@ -778,24 +853,28 @@ starting (SoupMessage *msg, gpointer user_data)
 		soup_logger_set_id (logger, priv->session);
 
 	conn = soup_message_get_connection (msg);
-	socket = conn ? soup_connection_get_socket (conn) : NULL;
+        if (conn) {
+                socket = soup_connection_get_socket (conn);
+                g_object_unref (conn);
+        }
 	if (socket && !soup_logger_get_id (logger, socket))
 		soup_logger_set_id (logger, socket);
 
+        g_mutex_lock (&priv->mutex);
 	print_request (logger, msg, socket, restarted);
 	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
+        g_mutex_unlock (&priv->mutex);
 }
 
 static void
 soup_logger_request_queued (SoupSessionFeature *logger,
-			    SoupSession *session,
-			    SoupMessage *msg)
+			    SoupMessage        *msg)
 {
 	g_return_if_fail (SOUP_IS_MESSAGE (msg));
 
-	g_signal_connect (msg, "starting",
-			  G_CALLBACK (starting),
-			  logger);
+	g_signal_connect (msg, "wrote-body",
+				G_CALLBACK (wrote_body),
+				logger);
 	g_signal_connect (msg, "got-informational",
 			  G_CALLBACK (got_informational),
 			  logger);
@@ -809,15 +888,11 @@ soup_logger_request_queued (SoupSessionFeature *logger,
 
 static void
 soup_logger_request_unqueued (SoupSessionFeature *logger,
-			      SoupSession *session,
-			      SoupMessage *msg)
+			      SoupMessage        *msg)
 {
 	g_return_if_fail (SOUP_IS_MESSAGE (msg));
 
-	g_signal_handlers_disconnect_by_func (msg, starting, logger);
-	g_signal_handlers_disconnect_by_func (msg, got_informational, logger);
-	g_signal_handlers_disconnect_by_func (msg, got_body, logger);
-	g_signal_handlers_disconnect_by_func (msg, finished, logger);
+	g_signal_handlers_disconnect_by_data (msg, logger);
 }
 
 static void
@@ -827,17 +902,12 @@ soup_logger_feature_attach (SoupSessionFeature *feature,
 	SoupLoggerPrivate *priv = soup_logger_get_instance_private (SOUP_LOGGER (feature));
 
 	priv->session = session;
-
-	soup_logger_default_feature_interface->attach (feature, session);
 }
 
 static void
 soup_logger_session_feature_init (SoupSessionFeatureInterface *feature_interface,
 				  gpointer interface_data)
 {
-	soup_logger_default_feature_interface =
-		g_type_default_interface_peek (SOUP_TYPE_SESSION_FEATURE);
-
 	feature_interface->attach = soup_logger_feature_attach;
 	feature_interface->request_queued = soup_logger_request_queued;
 	feature_interface->request_unqueued = soup_logger_request_unqueued;
