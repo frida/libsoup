@@ -6,6 +6,7 @@
 #pragma once
 
 #include "soup-auth-domain.h"
+#include "soup-server-message.h"
 
 G_BEGIN_DECLS
 

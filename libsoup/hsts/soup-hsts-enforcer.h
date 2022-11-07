@@ -6,6 +6,7 @@
 
 #pragma once
 
+#include "soup-hsts-policy.h"
 #include "soup-types.h"
 
 G_BEGIN_DECLS
