@@ -22,6 +22,7 @@
 
 #pragma once
 
+#include "soup-message.h"
 #include "soup-types.h"
 
 G_BEGIN_DECLS

@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include "soup-auth-domain.h"
+#include "soup-server-message.h"
 #include "soup-types.h"
 #include "soup-uri-utils.h"
 #include "soup-websocket-connection.h"

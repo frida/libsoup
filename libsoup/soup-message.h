@@ -8,6 +8,7 @@
 #include "soup-types.h"
 #include "soup-message-body.h"
 #include "soup-message-headers.h"
+#include "soup-message-metrics.h"
 #include "soup-method.h"
 #include "soup-multipart.h"
 

@@ -7,6 +7,7 @@
 
 #include "soup-types.h"
 #include "soup-message.h"
+#include "soup-session-feature.h"
 #include "soup-websocket-connection.h"
 
 G_BEGIN_DECLS
