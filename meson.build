@@ -126,7 +126,10 @@ glib_deps = [glib_dep, gmodule_dep, gobject_dep, gio_dep]
 cdata = configuration_data()
 
 libnghttp2_dep = dependency('libnghttp2')
-if cc.has_function('nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation', prefix : '#include <nghttp2/nghttp2.h>', dependencies : libnghttp2_dep)
+if libnghttp2_dep.type_name() == 'internal' \
+      or cc.has_function('nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation',
+                         prefix : '#include <nghttp2/nghttp2.h>',
+                         dependencies : libnghttp2_dep)
     cdata.set('HAVE_NGHTTP2_OPTION_SET_NO_RFC9113_LEADING_AND_TRAILING_WS_VALIDATION', '1')
 endif
 
