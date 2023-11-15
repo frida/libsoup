@@ -12,6 +12,8 @@
 #include <glib/gi18n-lib.h>
 #include "gconstructor.h"
 
+#ifndef GLIB_STATIC_COMPILATION
+
 #ifdef G_OS_WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -107,4 +109,6 @@ soup_init_ctor (void)
 
 #else
 # error Your platform/compiler is missing constructor support
+#endif
+
 #endif
