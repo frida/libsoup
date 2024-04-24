@@ -1,6 +1,6 @@
 [wrap-git]
 url = https://github.com/frida/libpsl.git
-revision = main
+revision = b76c0fed2e27353d5fbb067ecdfdf76d2281eb91
 depth = 1
 clone-recursive = true
 
