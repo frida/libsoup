@@ -95,4 +95,11 @@ SOUP_AVAILABLE_IN_ALL
 void                soup_websocket_connection_set_keepalive_interval (SoupWebsocketConnection *self,
                                                                       guint                    interval);
 
+SOUP_AVAILABLE_IN_ALL
+void                soup_websocket_connection_pause_input (SoupWebsocketConnection *self);
+
+
+SOUP_AVAILABLE_IN_ALL
+void                soup_websocket_connection_resume_input (SoupWebsocketConnection *self);
+
 G_END_DECLS
