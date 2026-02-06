@@ -129,6 +129,7 @@ typedef struct {
 
 	gboolean io_closing;
 	gboolean io_closed;
+	gboolean input_paused;
 
 	GPollableInputStream *input;
 	GSource *input_source;
@@ -152,6 +153,8 @@ typedef struct {
 #define MASK_LENGTH 4
 
 G_DEFINE_FINAL_TYPE_WITH_PRIVATE (SoupWebsocketConnection, soup_websocket_connection, G_TYPE_OBJECT)
+
+static void soup_websocket_connection_read (SoupWebsocketConnection *self);
 
 static void queue_frame (SoupWebsocketConnection *self, SoupWebsocketQueueFlags flags,
 			 gpointer data, gsize len, gsize amount);
@@ -310,6 +313,27 @@ soup_websocket_connection_stop_input_source (SoupWebsocketConnection *self)
 		g_source_destroy (priv->input_source);
 		g_source_unref (priv->input_source);
 		priv->input_source = NULL;
+	}
+}
+
+void
+soup_websocket_connection_pause_input (SoupWebsocketConnection *self)
+{
+	SoupWebsocketConnectionPrivate *priv = soup_websocket_connection_get_instance_private (self);
+
+	priv->input_paused = TRUE;
+	soup_websocket_connection_stop_input_source (self);
+}
+
+void
+soup_websocket_connection_resume_input (SoupWebsocketConnection *self)
+{
+	SoupWebsocketConnectionPrivate *priv = soup_websocket_connection_get_instance_private (self);
+
+	if (priv->input_paused)
+	{
+		priv->input_paused = FALSE;
+		soup_websocket_connection_read (self);
 	}
 }
 
@@ -1070,6 +1094,9 @@ soup_websocket_connection_read (SoupWebsocketConnection *self)
 	gssize count;
 	gsize len;
 
+	if (priv->input_paused)
+		return;
+
 	soup_websocket_connection_stop_input_source (self);
 
 	do {
@@ -1092,9 +1119,9 @@ soup_websocket_connection_read (SoupWebsocketConnection *self)
 		}
 
 		priv->incoming->len = len + count;
-	} while (count > 0);
 
-	process_incoming (self);
+		process_incoming (self);
+	} while (count > 0 && !priv->close_sent && !priv->io_closing && !priv->input_paused);
 
 	if (end) {
 		if (!priv->close_sent || !priv->close_received)
@@ -1104,7 +1131,7 @@ soup_websocket_connection_read (SoupWebsocketConnection *self)
 		return;
 	}
 
-	if (!priv->io_closing)
+	if (!priv->io_closing && !priv->input_paused)
 		soup_websocket_connection_start_input_source (self);
 }
 
