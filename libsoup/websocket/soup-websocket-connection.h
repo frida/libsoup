@@ -109,4 +109,11 @@ SOUP_AVAILABLE_IN_3_6
 void                soup_websocket_connection_set_keepalive_pong_timeout (SoupWebsocketConnection *self,
                                                                           guint                    pong_timeout);
 
+SOUP_AVAILABLE_IN_ALL
+void                soup_websocket_connection_pause_input (SoupWebsocketConnection *self);
+
+
+SOUP_AVAILABLE_IN_ALL
+void                soup_websocket_connection_resume_input (SoupWebsocketConnection *self);
+
 G_END_DECLS
