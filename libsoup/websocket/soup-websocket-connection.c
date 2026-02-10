@@ -169,7 +169,7 @@ typedef struct {
 } SoupWebsocketConnectionPrivate;
 
 #define MAX_INCOMING_PAYLOAD_SIZE_DEFAULT   128 * 1024
-#define READ_BUFFER_SIZE 1024
+#define READ_BUFFER_SIZE 64 * 1024
 #define MASK_LENGTH 4
 #define MAX_FRAME_HEADER_SIZE (10 + MASK_LENGTH)
 
