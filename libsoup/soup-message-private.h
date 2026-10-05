@@ -11,6 +11,7 @@
 #include "soup-client-message-io.h"
 #include "auth/soup-auth.h"
 #include "content-sniffer/soup-content-sniffer.h"
+#include "content-decoder/soup-compression-dictionary-request.h"
 #include "soup-session.h"
 
 void             soup_message_set_status       (SoupMessage      *msg,
@@ -80,6 +81,8 @@ void soup_message_wrote_body_data   (SoupMessage *msg,
 void soup_message_wrote_body        (SoupMessage *msg);
 void soup_message_got_informational (SoupMessage *msg);
 void soup_message_got_headers       (SoupMessage *msg);
+void soup_message_got_body_data     (SoupMessage *msg,
+                                     gsize        chunk_size);
 void soup_message_got_body          (SoupMessage *msg);
 void soup_message_content_sniffed   (SoupMessage *msg,
 				     const char  *content_type,
@@ -155,5 +158,9 @@ guint8   soup_message_get_force_http_version    (SoupMessage *msg);
 void     soup_message_set_is_misdirected_retry  (SoupMessage *msg,
                                                  gboolean     is_misdirected_retry);
 gboolean soup_message_is_misdirected_retry      (SoupMessage *msg);
+
+void                              soup_message_set_compression_dictionary_request (SoupMessage                      *msg,
+                                                                                   SoupCompressionDictionaryRequest *request);
+SoupCompressionDictionaryRequest *soup_message_get_compression_dictionary_request (SoupMessage                      *msg);
 
 #endif /* __SOUP_MESSAGE_PRIVATE_H__ */

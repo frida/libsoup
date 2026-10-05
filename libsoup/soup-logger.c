@@ -27,12 +27,12 @@
  *
  * Debug logging support
  *
- * #SoupLogger watches a [class@Session] and logs the HTTP traffic that
+ * [class@Logger] watches a [class@Session] and logs the HTTP traffic that
  * it generates, for debugging purposes. Many applications use an
  * environment variable to determine whether or not to use
- * #SoupLogger, and to determine the amount of debugging output.
+ * [class@Logger], and to determine the amount of debugging output.
  *
- * To use #SoupLogger, first create a logger with [ctor@Logger.new], optionally
+ * To use [class@Logger], first create a logger with [ctor@Logger.new], optionally
  * configure it with [method@Logger.set_request_filter],
  * [method@Logger.set_response_filter], and [method@Logger.set_printer], and
  * then attach it to a session (or multiple sessions) with
@@ -49,11 +49,11 @@
  * > Content-Type: text/plain
  * > Connection: close
  *
- * &lt; HTTP/1.1 201 Created
- * &lt; Soup-Debug-Timestamp: 1200171744
- * &lt; Soup-Debug: SoupMessage 1 (0x617000)
- * &lt; Date: Sun, 12 Jan 2008 21:02:24 GMT
- * &lt; Content-Length: 0
+ * < HTTP/1.1 201 Created
+ * < Soup-Debug-Timestamp: 1200171744
+ * < Soup-Debug: SoupMessage 1 (0x617000)
+ * < Date: Sun, 12 Jan 2008 21:02:24 GMT
+ * < Content-Length: 0
  * ```
  *
  * The `Soup-Debug-Timestamp` line gives the time (as a `time_t`) when the
@@ -63,7 +63,7 @@
  * [class@Session], [class@Message], and [class@Gio.Socket] involved; the hex
  * numbers are the addresses of the objects in question (which may be useful if
  * you are running in a debugger). The decimal IDs are simply counters that
- * uniquely identify objects across the lifetime of the #SoupLogger. In
+ * uniquely identify objects across the lifetime of the [class@Logger]. In
  * particular, this can be used to identify when multiple messages are sent
  * across the same connection.
  *
@@ -75,7 +75,7 @@
  * from the network (from the [signal@Message::got-body] or
  * [signal@Message::got-informational] signal), which means that the
  * [signal@Message::got-headers] signal, and anything triggered off it (such as
- * #SoupMessage::authenticate) will be emitted *before* the response headers are
+ * [signal@Message::authenticate]) will be emitted *before* the response headers are
  * actually logged.
  *
  * If the response doesn't happen to trigger the [signal@Message::got-body] nor
@@ -196,11 +196,14 @@ soup_logger_content_processor_wrap_input (SoupContentProcessor *processor,
         SoupLogger *logger = SOUP_LOGGER (processor);
         SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
         SoupLoggerInputStream *stream;
-        SoupLoggerLogLevel log_level;
+        SoupLoggerLogLevel log_level = SOUP_LOGGER_LOG_NONE;
 
-        if (priv->request_filter)
-                log_level = priv->request_filter (logger, msg,
-                                                  priv->response_filter_data);
+        if (priv->request_filter || priv->response_filter) {
+                if (priv->request_filter)
+                        log_level = priv->request_filter (logger, msg, priv->request_filter_data);
+                if (priv->response_filter)
+                        log_level = MAX(log_level, priv->response_filter (logger, msg, priv->response_filter_data));
+        }
         else
                 log_level = priv->level;
 
@@ -371,7 +374,7 @@ soup_logger_class_init (SoupLoggerClass *logger_class)
  * soup_logger_new:
  * @level: the debug level
  *
- * Creates a new #SoupLogger with the given debug level.
+ * Creates a new [class@Logger] with the given debug level.
  *
  * If you need finer control over what message parts are and aren't
  * logged, use [method@Logger.set_request_filter] and
@@ -558,22 +561,24 @@ soup_logger_set_id (SoupLogger *logger, gpointer object)
 	return GPOINTER_TO_UINT (id);
 }
 
-static void soup_logger_print (SoupLogger *logger, SoupLoggerLogLevel level,
-			       char direction, const char *format, ...) G_GNUC_PRINTF (4, 5);
+static void
+soup_logger_print_new_line (SoupLogger *logger, SoupLoggerLogLevel level, char direction)
+{
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+
+        if (priv->printer)
+                priv->printer (logger, level, direction, "", priv->printer_data);
+        else
+                printf ("%c \n", direction);
+}
 
 static void
-soup_logger_print (SoupLogger *logger, SoupLoggerLogLevel level,
-		   char direction, const char *format, ...)
+soup_logger_print_lines (SoupLogger *logger, SoupLoggerLogLevel level, char direction, char *data)
 {
-	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
-	va_list args;
-	char *data, *line, *end;
+        SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+        char *line, *end;
 
-	va_start (args, format);
-	data = g_strdup_vprintf (format, args);
-	va_end (args);
-
-	line = data;
+        line = data;
 	do {
 		end = strchr (line, '\n');
 		if (end)
@@ -586,8 +591,33 @@ soup_logger_print (SoupLogger *logger, SoupLoggerLogLevel level,
 
 		line = end + 1;
 	} while (end && *line);
+}
 
+static void soup_logger_print (SoupLogger *logger, SoupLoggerLogLevel level,
+			       char direction, const char *format, ...) G_GNUC_PRINTF (4, 5);
+
+static void
+soup_logger_print (SoupLogger *logger, SoupLoggerLogLevel level,
+		   char direction, const char *format, ...)
+{
+	va_list args;
+	char *data;
+
+	va_start (args, format);
+	data = g_strdup_vprintf (format, args);
+	va_end (args);
+
+        soup_logger_print_lines (logger, level, direction, data);
 	g_free (data);
+}
+
+static void
+soup_logger_print_decorative_newline (SoupLogger *logger)
+{
+	SoupLoggerPrivate *priv = soup_logger_get_instance_private (logger);
+	if (!priv->printer) {
+		g_print("\n");
+	}
 }
 
 static void
@@ -680,6 +710,8 @@ print_request (SoupLogger *logger, SoupMessage *msg,
 	if (log_level == SOUP_LOGGER_LOG_MINIMAL)
 		return;
 
+	soup_logger_print (logger, SOUP_LOGGER_LOG_HEADERS, '>', "Soup-Host: %s", g_uri_get_host (uri));
+
 	soup_message_headers_iter_init (&iter, soup_message_get_request_headers (msg));
 	while (soup_message_headers_iter_next (&iter, &name, &value)) {
 		if (!g_ascii_strcasecmp (name, "Authorization") &&
@@ -692,17 +724,21 @@ print_request (SoupLogger *logger, SoupMessage *msg,
 	}
 
 	if (log_level == SOUP_LOGGER_LOG_HEADERS)
-		return;
+		goto print_newline_and_return;
 
 	/* will be logged in get_informational */
 	if (soup_message_headers_get_expectations (soup_message_get_request_headers (msg)) == SOUP_EXPECTATION_CONTINUE)
-		return;
+		goto print_newline_and_return;
 
 	if (!g_hash_table_steal_extended (priv->request_bodies, msg, NULL, (gpointer *)&body))
-		return;
+		goto print_newline_and_return;
 
-	soup_logger_print (logger, SOUP_LOGGER_LOG_BODY, '>', "\n%s", body->str);
+        soup_logger_print_new_line (logger, SOUP_LOGGER_LOG_BODY, '>');
+	soup_logger_print_lines (logger, SOUP_LOGGER_LOG_BODY, '>', body->str);
 	g_string_free (body, TRUE);
+
+print_newline_and_return:
+	soup_logger_print_decorative_newline (logger);
 }
 
 static void
@@ -737,7 +773,7 @@ print_response (SoupLogger *logger, SoupMessage *msg)
 			   soup_logger_get_id (logger, msg), msg);
 
 	if (log_level == SOUP_LOGGER_LOG_MINIMAL)
-		return;
+		goto print_newline_and_return;
 
 	soup_message_headers_iter_init (&iter, soup_message_get_response_headers (msg));
 	while (soup_message_headers_iter_next (&iter, &name, &value)) {
@@ -746,13 +782,17 @@ print_response (SoupLogger *logger, SoupMessage *msg)
 	}
 
 	if (log_level == SOUP_LOGGER_LOG_HEADERS)
-		return;
+		goto print_newline_and_return;
 
 	if (!g_hash_table_steal_extended (priv->response_bodies, msg, NULL, (gpointer *)&body))
-		return;
+		goto print_newline_and_return;
 
-	soup_logger_print (logger, SOUP_LOGGER_LOG_BODY, '<', "\n%s", body->str);
+        soup_logger_print_new_line (logger, SOUP_LOGGER_LOG_BODY, '<');
+	soup_logger_print_lines (logger, SOUP_LOGGER_LOG_BODY, '<', body->str);
 	g_string_free (body, TRUE);
+
+print_newline_and_return:
+	soup_logger_print_decorative_newline (logger);
 }
 
 static void
@@ -769,7 +809,6 @@ finished (SoupMessage *msg, gpointer user_data)
 
         g_mutex_lock (&priv->mutex);
 	print_response (logger, msg);
-	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
         g_mutex_unlock (&priv->mutex);
 }
 
@@ -791,7 +830,6 @@ got_informational (SoupMessage *msg, gpointer user_data)
 
         g_signal_handlers_disconnect_by_func (msg, finished, logger);
         print_response (logger, msg);
-        soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
 
         if (!g_hash_table_steal_extended (priv->response_bodies, msg, NULL, (gpointer *)&body)) {
                 g_mutex_unlock (&priv->mutex);
@@ -802,12 +840,10 @@ got_informational (SoupMessage *msg, gpointer user_data)
                 soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, '>',
                                    "[Now sending request body...]");
 
-                if (log_level == SOUP_LOGGER_LOG_BODY) {
-                        soup_logger_print (logger, SOUP_LOGGER_LOG_BODY,
-                                           '>', "%s", body->str);
-                }
+                if (log_level == SOUP_LOGGER_LOG_BODY)
+                        soup_logger_print_lines (logger, SOUP_LOGGER_LOG_BODY, '>', body->str);
 
-                soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
+                soup_logger_print_decorative_newline (logger);
         }
 
         g_string_free (body, TRUE);
@@ -826,7 +862,6 @@ got_body (SoupMessage *msg, gpointer user_data)
 	g_signal_handlers_disconnect_by_func (msg, finished, logger);
 
 	print_response (logger, msg);
-	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
 
         g_mutex_unlock (&priv->mutex);
 }
@@ -862,7 +897,6 @@ wrote_body (SoupMessage *msg, gpointer user_data)
 
         g_mutex_lock (&priv->mutex);
 	print_request (logger, msg, socket, restarted);
-	soup_logger_print (logger, SOUP_LOGGER_LOG_MINIMAL, ' ', "\n");
         g_mutex_unlock (&priv->mutex);
 }
 

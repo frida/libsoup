@@ -5,7 +5,7 @@
 
 #pragma once
 
-#include "soup-session.h"
+#include "soup-session-feature.h"
 
 G_BEGIN_DECLS
 

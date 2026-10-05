@@ -20,10 +20,10 @@ G_BEGIN_DECLS
  * 
  * The thing that these defines <emphasis>are</emphasis> useful for is
  * performing quick comparisons against soup_message_get_method();
- * because #SoupMessage always contains an interned string, and these
+ * because [class@Message] always contains an interned string, and these
  * macros return interned strings, you can compare methods directly
  * against these macros rather than needing to use strcmp(). This is
- * most useful in #SoupServer handlers. Eg:
+ * most useful in [class@Server] handlers. Eg:
  * 
  * <informalexample><programlisting>
  * 	if (soup_message_get_method (msg) != SOUP_METHOD_GET &amp;&amp; soup_message_get_method (msg) != SOUP_METHOD_HEAD) {
@@ -44,6 +44,7 @@ G_BEGIN_DECLS
 #define SOUP_METHOD_DELETE    _SOUP_INTERN_METHOD (DELETE)
 #define SOUP_METHOD_TRACE     _SOUP_INTERN_METHOD (TRACE)
 #define SOUP_METHOD_CONNECT   _SOUP_INTERN_METHOD (CONNECT)
+#define SOUP_METHOD_PATCH     _SOUP_INTERN_METHOD (PATCH)
 
 /* WebDAV methods */
 #define SOUP_METHOD_PROPFIND  _SOUP_INTERN_METHOD (PROPFIND)
@@ -65,6 +66,7 @@ SOUP_VAR gpointer _SOUP_METHOD_PUT;
 SOUP_VAR gpointer _SOUP_METHOD_DELETE;
 SOUP_VAR gpointer _SOUP_METHOD_TRACE;
 SOUP_VAR gpointer _SOUP_METHOD_CONNECT;
+SOUP_VAR gpointer _SOUP_METHOD_PATCH;
 
 SOUP_VAR gpointer _SOUP_METHOD_PROPFIND;
 SOUP_VAR gpointer _SOUP_METHOD_PROPPATCH;

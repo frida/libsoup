@@ -1,3 +1,249 @@
+Changes in libsoup from 3.7.3 to 3.8.0:
+
+* Harden authentication:
+    * Check `nonce` validity in Digest authentication (CVE-2026-3099) [Milan Crha]
+    * Do not send cached proxy credentials after a redirect to a different origin [Milan Crha]
+* Harden multipart handling:
+    * Fix an out-of-bounds read when less data than the boundary is buffered (CVE-2026-66337) [Patrick Griffis]
+    * Limit the length of part headers [Milan Crha]
+    * Fix a leak of the current part's headers [Patrick Griffis]
+* Prevent request smuggling in the server:
+    * Close the connection after an early response to `Expect: 100-continue` [Patrick Griffis]
+    * Reject `Host` headers containing URI delimiters [Patrick Griffis]
+    * Require chunk-size to begin with a hex digit [Samuel Dainard]
+* http2:
+    * Fix skipping over multiple buffered chunks of a response body [Milan Crha]
+    * Fix a `GCancellable` leak [Michael Catanzaro]
+* Fix the build on platforms without `dlfcn.h` [Yegor Yefremov]
+* Update Belarusian translation [Vasil Pupkin]
+* Update Slovenian translation [Martin]
+
+Changes in libsoup from 3.7.2 to 3.7.3:
+
+* Add `soup_message_set_compression_dictionary_id()` and `soup_message_get_compression_dictionary_id()` to send the `Dictionary-ID` header alongside `Available-Dictionary` [Patrick Griffis]
+* Add `soup_websocket_extension_process_incoming_message_with_limit()` so extensions can bound how much they decompress [Zayd Rajab]
+* Harden WebSocket handling:
+    * Bound decompressed message size during inflation (CVE-2026-15709) [Zayd Rajab]
+    * Reject oversized control frames (CVE-2026-15711) [Zayd Rajab]
+    * Cap incoming frame payloads, message reassembly, and outgoing frames at what the underlying buffer can hold [Patrick Griffis]
+    * Bound outgoing permessage-deflate buffer growth [Patrick Griffis]
+    * Cap the number of queued unsolicited pongs [Patrick Griffis]
+    * Emit `SoupWebsocketConnection::pong` with a `GBytes`, as declared [Patrick Griffis]
+    * Store accepted WebSocket extensions per message rather than per handler [Felix Nilsson]
+* Harden authentication and caching:
+    * Do not send `Proxy-Authorization` through an established CONNECT tunnel (CVE-2026-66339) [Patrick Griffis]
+    * Scope cached proxy credentials to the proxy they came from (CVE-2026-12547) [Patrick Griffis]
+    * Reject caching authenticated responses in shared caches (CVE-2026-15713) [Milan Crha]
+* Tighten HTTP parsing and validation:
+    * Reject CRLF injection in the HTTP method (CVE-2026-3633) [Milan Crha, Patrick Griffis]
+    * Fix `Range` parsing overflows and coalescing cost, and validate `Content-Range` when parsing it [Patrick Griffis]
+    * Keep duplicate `Content-Length` headers when they are identical [Patrick Griffis]
+    * Fix an out-of-bounds read in case of an excessively long multipart boundary [Mike Gorse]
+    * Do not treat base64 data URI content as a NUL-terminated string [Patrick Griffis]
+* http2:
+    * Never send more body bytes than nghttp2 requested (CVE-2026-85534) [Patrick Griffis]
+    * Keep the message alive across `io_run_until()` in `run_until_read()` [Patrick Griffis]
+    * Do not assume that `GOAWAY` opaque data is NUL-terminated [Mike Gorse]
+* server: Report the resource length in 416 responses [Patrick Griffis]
+* session: Do not send a message cancelled while being queued [Patrick Griffis]
+* cookie: Annotate constants' values [Maximiliano Sandoval]
+
+Changes in libsoup from 3.7.1 to 3.7.2:
+
+* Add support for compression dictionaries:
+  * Support the dcb and dcz encodings [Patrick Griffis]
+  * Add new `soup_message_set_compression_dictionary_hash()`, `SoupMessage::request-compression-dictionary`, and `SoupCompressionDictionaryRequest` APIs [Patrick Griffis]
+* Remove color codes from http2 debug logs [Patrick Griffis]
+* Add missing autoptr defines for `SoupMessageBody` [Patrick Griffis]
+* http2: Fix content-sniffer running while message is paused [Patrick Griffis]
+* http2: Consume buffered response body before cancel [Dominik Schnitzer]
+* http2: Fix requeuing failed messages when connection is not reusable [Pablo Saavedra]
+* soup-body-input-stream: Limit buffer read to the received content [Milan Crha]
+
+Changes in libsoup from 3.6.6 to 3.7.1:
+
+* Add support for the `zstd` content encoding [Patrick Griffis]
+* Add `SoupWebsocketConnection:max-total-message-size` to limit incoming WebSocket message sizes [Ignacio Casal Quinteiro, Michael Catanzaro]
+* Harden cookie and cookie jar handling:
+    * Ignore cookies impersonating prefixed cookies, as well as cookies with empty names and values [Patrick Griffis]
+    * Annotate `SoupCookieJar::changed` arguments as nullable [Corentin Noël]
+    * Add `SoupCookieJarDB:max-size` to limit the file size of the database [Filipe Norte]
+    * Expose `SoupCookieJarDB` construction failures via `GInitable`, and rename `SoupCookieJarDBError` to `SoupCookieJarError` [Patrick Griffis]
+    * Avoid sending cookies to HTTP proxies for HTTPS requests [Carlos Garcia Campos]
+* Tighten HTTP parsing and validation:
+    * Reject multiple `Content-Length` headers and tighten `Content-Length` validation [Carlos Garcia Campos, Samuel Dainard]
+* websocket: Fix an out-of-bounds read when reading an unmasked frame, and make `Sec-WebSocket-Protocol` matching case-sensitive [Mike Gorse, Diego Pino Garcia]
+* http2: Fix graceful `GOAWAY` handling and several crashes and read/write edge cases [Carlos Alberto Lopez Perez, Eugene Mutavchi, Carlos Garcia Campos, Patrick Griffis, Michael Catanzaro]
+* auth: Drop unused automatic NTLM auth and reject excessively long NTLM passwords [Michael Catanzaro, Mike Gorse]
+* http1: Improve chunked request parsing [Carlos Garcia Campos]
+
+Changes in libsoup from 3.6.5 to 3.6.6:
+
+* websocket: Fix out-of-bounds read in process_frame [Mike Gorse]
+* Check nulls returned by soup_date_time_new_from_http_string() [Adrian Perez de Castro]
+* Numerous fixes to handling of Range headers [Philip Withnall]
+* server: close the connection after responsing a request containing Content-Length and Transfer-Encoding [Carlos Garcia Campos]
+* Use CRLF as line boundary when parsing chunked enconding data [Carlos Garcia Campos]
+* websocket: do not accept messages frames after closing due to an error [Carlos Garcia Campos]
+* Sanitize filename of content disposition header values [Carlos Garcia Campos]
+* Always validate the headers value when coming from untrusted source [Carlos Garcia Campos]
+* uri-utils: do host validation when checking if a GUri is valid [Carlos Garcia Campos]
+* multipart: check length of bytes read soup_filter_input_stream_read_until() [Carlos Garcia Campos]
+* message-headers: Reject duplicate Host headers [Michael Catanzaro]
+* server: null-check soup_date_time_to_string() [Michael Catanzaro]
+* auth-digest: fix crash in soup_auth_digest_get_protection_space() [Michael Catanzaro]
+* session: fix 'heap-use-after-free' caused by 'finishing' queue item twice [Eugene Mutavchi]
+* cookies: Avoid expires attribute if date is invalid [Alynx Zhou]
+* http1: Set EOF flag once content-length bytes have been read [Marvin W]
+* date-utils: Add value checks for date/time parsing [Milan Crha]
+* multipart: Fix multiple boundry limits [Milan Crha]
+* Fixed multiple possible memory leaks [Milan Crha]
+* message-headers: Correct merge of ranges [Milan Crha]
+* body-input-stream: Correct chunked trailers end detection [Milan Crha]
+* server-http2: Correctly validate URIs [Milan Crha]
+* multipart: Fix read out of buffer bounds under soup_multipart_new_from_message() [Milan Crha]
+* headers: Ensure Request-Line comprises entire first line [Brian Yurko]
+* tests: Fix MSVC build error [Seungha Yang]
+* Fix possible deadlock on init from gmodule usage [Nirbheek Chauhan]
+
+* Add Cornish translation [Flynn Peck]
+* Update Turkish translation [Sabri Ünal]
+* Update Uighur translation [Abduqadir Abliz]
+* Update Romanian translation [Antonio Marin]
+* Add Uzbek (Latin) translation [Oyatillo Mamirov]
+* Add Kazakh translation [Baurzhan Muftakhidinov]
+
+Changes in libsoup from 3.6.4 to 3.6.5:
+
+* session: Strip authentication credentials on cross-origin redirects [Patrick Griffis]
+* build: Use pkg-config instead of krb5-config for the gssapi dependency [Patrick Griffis]
+* http1: When using chunked encoding report an error in case of unexpected stream end [Andrzej Surdej]
+* http2: When a message has no content still respect its Content-Type [Patrick Griffis]
+* http2: Revert manual window size management temporarily, as it could stall [Patrick Griffis]
+* sniffer: Fix potential overflows [Patrick Griffis]
+* hsts: Fix minor leak [Patrick Griffis]
+* headers: Fix a few parsing edge cases that could be an out of bound read [Patrick Griffis]
+* connection: Avoid ever calling disconnect twice [Patrick Griffis]
+* auth-digest: Fix handling when a nonce isn't present [Patrick Griffis]
+* cookies: Limit max size of max-age, path, and domain attributes to 1024 bytes [Patrick Griffis]
+* cookies: Limit max size of name and value to 4096 bytes [Patrick Griffis]
+* docs: Remove references to old libsoup domain [Simon McVittie]
+
+Changes in libsoup from 3.6.3 to 3.6.4:
+
+* http2: Fix regression on 32bit systems when reading response data [Andrzej Surdej]
+
+Changes in libsoup from 3.6.1 to 3.6.3:
+
+* http2: Significantly reduce memory usage of large requests [Patrick Griffis]
+* server: Treat `ECONNREFUSED` when listening on IPv6 as unsupported [Michael Catanzaro]
+* auth-digest: Fix handling missing nonce/realm in responses, as well as a leak [Patrick Griffis]
+* In `soup_uri_decode_data_uri()` fix handling of URIs with a path beginning with `//` [Patrick Griffis]
+* In `soup_message_headers_get_content_disposition()` fix possibility of NULL-deref and double-free [Patrick Griffis]
+* In `soup_header_parse_quality_list()` fix leak [Patrick Griffis]
+* In `soup_form_decode_multipart()` fix ownership annotation for the multipart object [Patrick Griffis]
+
+Changes in libsoup from 3.6.0 to 3.6.1:
+
+* Fix `soup_uri_copy()` reading port as a long instead of an int [Artem Sinkevich]
+* Fix possible NULL deref in `soup_uri_decode_data_uri()` [Ar Jun]
+* Fix possible overflow in `SoupContentSniffer` [Ar Jun]
+* Fix assertion in `soup_uri_decode_data_uri()` on URLs with a path starting with `//` [Patrick Griffis]
+* headers: Be more robust against invalid input when parsing params [Patrick Griffis]
+* websocket: Fix possibility of being stuck in a read loop [Ignacio Casal Quinteiro]
+
+Changes in libsoup from 3.5.2 to 3.6.0:
+
+* Allow HTTP/2 to be used with non-HTTP proxies [Patrick Griffis]
+
+Changes in libsoup from 3.5.1 to 3.5.2:
+
+* Strictly forbid NUL bytes in headers [Patrick Griffis]
+* Fix minor leaks [Michael Catanzaro]
+
+Changes in libsoup from 3.4.4 to 3.5.1:
+
+* Add `SOUP_METHOD_PATCH` [Jan-Michael Brummer]
+* websocket: Add `SoupWebsocketConnection:keepalive-pong-timeout` property [Martin Nordholts]
+* Increase maxmimum size of HTTP headers [Filipe Norte]
+* Fix `soup_uri_copy()` in Vala [Val Och]
+* Fix leak in `soup_message_new_from_encoded_form()` [Andy Holmes]
+* multipart: Improve handling of messages missing termination [Vitaly Dyachkov]
+* logger: Fix request filter function being called with response user data [Jan-Michael Brummer]
+* logger: Fix response bodies never being logged if request bodies aren't [Patrick Griffis]
+* logger: Add Soup-Host to logged headers for when Host is missing [Jan-Michael Brummer]
+* cookies: Fix incorrect logic in determining same-site cookies [Patrick Griffis]
+* cookie-jar-db: Explicitly handle old databases lacking same-site column [Kanagaraj]
+* cookies: Limit the Max-Age to 1 year [Max Schmitt]
+
+Changes in libsoup from 3.4.3 to 3.4.4:
+
+* Improve HTTP/2 performance when a lot of buffering happens [Keyu Tao]
+* Support building libnghttp2 as a subproject [hrxi]
+
+Changes in libsoup from 3.4.2 to 3.4.3:
+
+* Fix incorrect UTF-8 encoding for params in headers [Leo Zi-You Assini]
+* Numerous HTTP/2 fixes and improvements [Carlos Garcia Campos]
+* Fix possible crashes in connection management [Michael Catanzaro]
+* Fix small leak in SoupServer [Emil Ljungdahl]
+* Fix the possibility of empty HTTP/2 frames being sent [Pawel Lampe]
+
+Changes in libsoup from 3.4.1 to 3.4.2:
+
+* Revert changes to request cancellation [Patrick Griffis]
+
+Changes in libsoup from 3.4.0 to 3.4.1:
+
+* Fix HTTP/2 on platforms with unsigned char [Patrick Griffis]
+* Change request cancellation to be handled earlier [Carlos Garcia Campos]
+* Add names to GSources and source tags to GTasks to aid debugging [Philip Withnall]
+
+Changes in libsoup from 3.3.1 to 3.4.0:
+
+* Fix possible crash in SoupContentSniffer [Patrick Griffis ]
+* Fix socket leak [Alessandro Bono]
+* Add missing annotation to soup_header_g_string_append_param_quoted() [Lukáš Tyrychtr]
+
+Changes in libsoup from 3.3.0 to 3.3.1:
+
+* Fix regression in `SoupCookieJar` not handling valid Secure cookies [Patrick Griffis]
+* Fix crash when skipping HTTP/1 response stream with chunked enconding [Carlos Garcia Campos]
+* Change Session to unqueue finished items earlier without an extra MainContext iteration [Carlos Garcia Campos]
+
+Changes in libsoup from 3.2.2 to 3.3.0:
+
+* Add `SoupMessage::got-body-data` signal to monitor progress of reads [Carlos Garcia Campos]
+* Add `soup_session_send_and_splice()` and `soup_session_send_and_splice_async()` convenience APIs [Carlos Garcia Campos]
+* Add `soup_message_set_force_http1()` and `soup_message_get_force_http1()` APIs [Milan Crha]
+* Change `soup_cookie_copy()` to not retain default ports [Patrick Griffis]
+* Ensure `SoupServerMessage` socket is available in websocket handler [Carlos Garcia Campos]
+* Fix `soup_message_new()` not erroring when URI has an empty host [Guillaume Desmottes]
+* Fix thread-saftey issues in `SoupConnectionAuth` [Milan Crha]
+* Fix various connection leaks [Biagio Festa, Carlos Garcia Campos]
+* Fix the possibility of sending invalid empty `Sec-WebSocket-Protocol` header [Lukáš Tyrychtr]
+* Fix IO errors not being handled on `CONNECT` messages [Carlos Garcia Campos]
+* Numerous improvements to cookies:
+    * Add support for cookie prefixes (`__Secure-` and `__Host-`) [Siwei Li]
+    * Reject cookies with control characters in name or value [Siwei Li]
+    * Reject `SameSite=None` cookies without `Secure` [Siwei Li]
+    * Change `soup_cookie_parse()` to be more strict about what is considered whitespace [Siwei Li]
+    * Change default SameSite value to `Lax` [Amanda Falke]
+    * Fix `soup_cookie_equal()` with `NULL` path [Patrick Griffis]
+
+Changes in libsoup from 3.2.1 to 3.2.2:
+
+* Various HTTP/2 Fixes: [Carlos Garcia Campos]
+    * Fix `content-sniffed` not being emitted for resources without content
+    * Fix leak of SoupServerConnection when stolen
+
+Changes in libsoup from 3.2.0 to 3.2.1:
+
+* When built against nghttp2 1.50.0+ be relaxed about header whitespace [Carlos Garcia Campos]
+* Fix possible crash when cancelling an HTTP/2 message [Carlos Garcia Campos]
+* Fix regresion where soup_server_message_get_socket() could return NULL [Carlos Garcia Campos]
+* Fix minor memory leak [Milan Crha]
+
 Changes in libsoup from 3.1.4 to 3.2.0:
 
 Changes in libsoup from 3.1.3 to 3.1.4:
@@ -17,7 +263,7 @@ Changes in libsoup from 3.1.1 to 3.1.2:
 
 Changes in libsoup from 3.0.7 to 3.1.1:
 
-* Reintroduce some thread-safety to SoupSession (see https://libsoup.org/libsoup-3.0/client-thread-safety.html) [Carlos Garcia Campos]
+* Reintroduce some thread-safety to SoupSession (see https://libsoup.gnome.org/libsoup-3.0/client-thread-safety.html) [Carlos Garcia Campos]
 * Add SoupServerMessage:tls-peer-certificate and SoupServerMessage:tls-peer-certificate-errors [Ignacio Casal Quinteiro]
 * Port docs to gi-docgen [Maximiliano Sandoval R]
 * Update documentation [Patrick Griffis]
@@ -208,7 +454,7 @@ Changes in libsoup from 2.99.1 to 2.99.2:
 Changes in libsoup from 2.72.0 to 2.99.1:
 
     * This is a major ABI breaking release that can be installed in parallel with 2.7x.
-      Numerous API have been changed which is documented on https://libsoup.org
+      Numerous API have been changed which is documented on https://libsoup.gnome.org
 
 Changes in libsoup from 2.71.1 to 2.72.0:
 

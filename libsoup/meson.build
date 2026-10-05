@@ -17,9 +17,12 @@ soup_sources = [
   'cache/soup-cache-client-input-stream.c',
   'cache/soup-cache-input-stream.c',
 
+  'content-decoder/soup-compression-dictionary-decoder.c',
+  'content-decoder/soup-compression-dictionary-request.c',
   'content-decoder/soup-content-decoder.c',
   'content-decoder/soup-content-processor.c',
   'content-decoder/soup-converter-wrapper.c',
+  'content-decoder/soup-dictionary-header-private.c',
 
   'content-sniffer/soup-content-sniffer.c',
   'content-sniffer/soup-content-sniffer-stream.c',
@@ -102,6 +105,7 @@ soup_introspection_headers = [
 
   'cache/soup-cache.h',
 
+  'content-decoder/soup-compression-dictionary-request.h',
   'content-decoder/soup-content-decoder.h',
 
   'content-sniffer/soup-content-sniffer.h',
@@ -152,6 +156,10 @@ if brotlidec_dep.found()
   soup_sources += 'content-decoder/soup-brotli-decompressor.c'
 endif
 
+if libzstd_dep.found()
+  soup_sources += 'content-decoder/soup-zstd-decompressor.c'
+endif
+
 
 install_headers(soup_installed_headers, subdir : includedir)
 
@@ -188,6 +196,7 @@ deps = [
   sqlite_dep,
   libpsl_dep,
   brotlidec_dep,
+  libzstd_dep,
   platform_deps,
   gssapi_dep,
   libz_dep,
@@ -261,6 +270,17 @@ libsoup_static_dep = declare_dependency(link_with : libsoup_static,
 if enable_introspection or enable_vapi
   soup_ns = 'Soup'
 
+   libsoup_gir_extra_args = [
+     libsoup_c_args,
+     '--warn-all',
+     '--quiet',
+   ]
+   if gir.version().version_compare('>=1.83.2')
+     libsoup_gir_extra_args += [
+       '--doc-format=gi-docgen',
+     ]
+   endif
+
   soup_gir_gen_sources = gnome.generate_gir(libsoup,
     sources : [
       soup_sources,
@@ -274,7 +294,7 @@ if enable_introspection or enable_vapi
     symbol_prefix : soup_ns.to_lower(),
     identifier_prefix : soup_ns,
     export_packages : libsoup_api_name,
-    extra_args : libsoup_c_args,
+    extra_args : libsoup_gir_extra_args,
     includes : 'Gio-2.0',
     install : true,
     header: join_paths(meson.project_name(), 'soup.h'),

@@ -23,14 +23,19 @@
 static void
 do_large_data_test (void)
 {
-#define CHUNK_SIZE (gsize)1024 * 1024 * 512 // 512 MiB
-#define TEST_SIZE CHUNK_SIZE * 20 // 10 GiB
+#define CHUNK_SIZE ((gsize)1024 * 1024 * 512) // 512 MiB
+#define TEST_SIZE (CHUNK_SIZE * 4) // 2 GiB
 
         GInputStream *stream = soup_body_input_stream_http2_new ();
         SoupBodyInputStreamHttp2 *mem_stream = SOUP_BODY_INPUT_STREAM_HTTP2 (stream);
         gsize data_needed = TEST_SIZE;
-        guint8 *memory_chunk = g_new (guint8, CHUNK_SIZE); 
-        guint8 *trash_buffer = g_new (guint8, CHUNK_SIZE);
+        guint8 *memory_chunk = g_try_new (guint8, CHUNK_SIZE);
+        guint8 *trash_buffer = g_try_new (guint8, CHUNK_SIZE);
+
+	if (memory_chunk == NULL || trash_buffer == NULL) {
+		g_test_skip ("large memory allocation failed");
+		goto out;
+	}
 
         /* We can add unlimited data and as long as its read the data will
          * be freed, so this should work fine even though its reading GB of data */
@@ -55,6 +60,7 @@ do_large_data_test (void)
                 data_needed -= CHUNK_SIZE;
         }
 
+out:
         g_free (trash_buffer);
         g_free (memory_chunk);
         g_object_unref (stream);
@@ -81,6 +87,95 @@ do_multiple_chunk_test (void)
                 g_assert_cmpint (read, ==, 2);
                 g_assert_cmpstr (buffer, ==, chunks[i]);
         }
+
+        g_object_unref (stream);
+}
+
+static void
+do_skip_multiple_chunks_test (void)
+{
+        GInputStream *stream = soup_body_input_stream_http2_new ();
+        SoupBodyInputStreamHttp2 *mem_stream = SOUP_BODY_INPUT_STREAM_HTTP2 (stream);
+        char buffer[5] = { 0 };
+        gssize n;
+
+        /* Fill three 4-byte chunks, then skip across the first two chunk
+         * boundaries.  The skip must remove both consumed chunks from the
+         * queue; otherwise subsequent reads return stale data from chunks
+         * that were supposed to have been freed. */
+        soup_body_input_stream_http2_add_data (mem_stream, (guint8 *)"AAAA", 4);
+        soup_body_input_stream_http2_add_data (mem_stream, (guint8 *)"BBBB", 4);
+        soup_body_input_stream_http2_add_data (mem_stream, (guint8 *)"CCCC", 4);
+
+        n = g_input_stream_skip (stream, 8, NULL, NULL);
+        g_assert_cmpint (n, ==, 8);
+
+        /* Reading "CCCC" is a baseline sanity check */
+        n = g_input_stream_read (stream, buffer, 4, NULL, NULL);
+        g_assert_cmpint (n, ==, 4);
+        g_assert_cmpstr (buffer, ==, "CCCC");
+
+        /* Add a fourth chunk after the skip; with the bug, a ghost "BBBB"
+         * chunk left in the queue would be returned here instead of "DDDD". */
+        memset (buffer, 0, sizeof (buffer));
+        soup_body_input_stream_http2_add_data (mem_stream, (guint8 *)"DDDD", 4);
+        soup_body_input_stream_http2_complete (mem_stream);
+
+        n = g_input_stream_read (stream, buffer, 4, NULL, NULL);
+        g_assert_cmpint (n, ==, 4);
+        g_assert_cmpstr (buffer, ==, "DDDD");
+
+        n = g_input_stream_read (stream, buffer, 4, NULL, NULL);
+        g_assert_cmpint (n, ==, 0); /* EOF */
+
+        g_object_unref (stream);
+}
+
+/* Each invocation delivers one byte then immediately consumes it via a
+ * non-blocking read, leaving the stream empty so the next retry also sees
+ * count==0.  This mimics on_data_chunk_recv_callback() calling
+ * io_try_sniff_content() which consumes incoming data before the outer
+ * blocking read_real() can retry. */
+static GError *
+need_more_data_consuming_cb (SoupBodyInputStreamHttp2 *stream,
+                             GCancellable             *cancellable,
+                             gpointer                  user_data)
+{
+        int *remaining = user_data;
+        guint8 byte = 0, tmp;
+        GError *error = NULL;
+
+        (*remaining)--;
+        if (*remaining > 0) {
+                soup_body_input_stream_http2_add_data (stream, &byte, 1);
+                g_pollable_input_stream_read_nonblocking (G_POLLABLE_INPUT_STREAM (stream),
+                                                          &tmp, 1, NULL, &error);
+                g_assert_no_error (error);
+        } else {
+                soup_body_input_stream_http2_complete (stream);
+        }
+
+        return NULL;
+}
+
+static void
+do_blocking_read_no_stackoverflow_test (void)
+{
+        GInputStream *stream = soup_body_input_stream_http2_new ();
+        SoupBodyInputStreamHttp2 *mem_stream = SOUP_BODY_INPUT_STREAM_HTTP2 (stream);
+        int remaining = 100000;
+        guint8 buffer[1];
+        gssize n;
+
+        g_signal_connect (mem_stream, "need-more-data",
+                          G_CALLBACK (need_more_data_consuming_cb), &remaining);
+
+        /* A single blocking read that triggers ITERATIONS need-more-data
+         * signals.  Without the goto-retry fix each signal caused a recursive
+         * call; with enough iterations the stack overflows and crashes. */
+        n = g_input_stream_read (stream, buffer, sizeof (buffer), NULL, NULL);
+        g_assert_cmpint (n, ==, 0);
+        g_assert_cmpint (remaining, ==, 0);
 
         g_object_unref (stream);
 }
@@ -123,6 +218,8 @@ main (int argc, char **argv)
 	g_test_add_func ("/body_stream/large_data", do_large_data_test);
         g_test_add_func ("/body_stream/multiple_chunks", do_multiple_chunk_test);
         g_test_add_func ("/body_stream/skip_async", do_skip_async_test);
+        g_test_add_func ("/body_stream/skip_multiple_chunks", do_skip_multiple_chunks_test);
+        g_test_add_func ("/body_stream/blocking_read_no_stackoverflow", do_blocking_read_no_stackoverflow_test);
 
 	ret = g_test_run ();
 

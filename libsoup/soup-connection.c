@@ -48,6 +48,9 @@ typedef struct {
 
 	GCancellable *cancellable;
         GThread *owner;
+
+        int window_size;
+        int stream_window_size;
 } SoupConnectionPrivate;
 
 G_DEFINE_FINAL_TYPE_WITH_PRIVATE (SoupConnection, soup_connection, G_TYPE_OBJECT)
@@ -91,6 +94,9 @@ static gboolean idle_timeout (gpointer conn);
  */
 #define SOUP_CONNECTION_UNUSED_TIMEOUT 3
 
+#define HTTP2_INITIAL_WINDOW_SIZE (15 * 1024 * 1024) /* 15MB */
+#define HTTP2_INITIAL_STREAM_WINDOW_SIZE (6 * 1024 * 1024) /* 6MB */
+
 static void
 soup_connection_init (SoupConnection *conn)
 {
@@ -99,6 +105,8 @@ soup_connection_init (SoupConnection *conn)
         priv->http_version = SOUP_HTTP_1_1;
         priv->force_http_version = G_MAXUINT8;
         priv->owner = g_thread_self ();
+        priv->window_size = HTTP2_INITIAL_WINDOW_SIZE;
+        priv->stream_window_size = HTTP2_INITIAL_STREAM_WINDOW_SIZE;
 }
 
 static void
@@ -138,8 +146,7 @@ soup_connection_dispose (GObject *object)
 
         if (priv->idle_timeout_src) {
                 g_source_destroy (priv->idle_timeout_src);
-                g_source_unref (priv->idle_timeout_src);
-                priv->idle_timeout_src = NULL;
+                g_clear_pointer (&priv->idle_timeout_src, g_source_unref);
         }
 
 	G_OBJECT_CLASS (soup_connection_parent_class)->dispose (object);
@@ -170,10 +177,18 @@ soup_connection_set_property (GObject *object, guint prop_id,
         case PROP_CONTEXT:
                 priv->idle_timeout_src = g_timeout_source_new (0);
                 g_source_set_ready_time (priv->idle_timeout_src, -1);
-                g_source_set_name (priv->idle_timeout_src, "Soup connection idle timeout");
+                g_source_set_static_name (priv->idle_timeout_src, "Soup connection idle timeout");
                 g_source_set_callback (priv->idle_timeout_src, idle_timeout, object, NULL);
                 g_source_attach (priv->idle_timeout_src, g_value_get_pointer (value));
                 break;
+	case PROP_REMOTE_ADDRESS:
+	case PROP_STATE:
+	case PROP_TLS_CERTIFICATE:
+	case PROP_TLS_CERTIFICATE_ERRORS:
+	case PROP_TLS_PROTOCOL_VERSION:
+	case PROP_TLS_CIPHERSUITE_NAME:
+		g_assert_not_reached ();
+		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
 		break;
@@ -219,6 +234,9 @@ soup_connection_get_property (GObject *object, guint prop_id,
                 break;
 	case PROP_FORCE_HTTP_VERSION:
 		g_value_set_uchar (value, priv->force_http_version);
+		break;
+	case PROP_CONTEXT:
+		g_assert_not_reached ();
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -573,6 +591,17 @@ tls_connection_ciphersuite_name_changed (SoupConnection *conn)
         g_object_notify_by_pspec (G_OBJECT (conn), properties[PROP_TLS_CIPHERSUITE_NAME]);
 }
 
+static gboolean
+is_not_using_http_proxy (SoupConnection *conn)
+{
+        SoupConnectionPrivate *priv = soup_connection_get_instance_private (conn);
+
+        if (!priv->remote_address || !G_IS_PROXY_ADDRESS (priv->remote_address))
+                return TRUE;
+
+        return g_strcmp0 (g_proxy_address_get_protocol (G_PROXY_ADDRESS (priv->remote_address)), "http") != 0;
+}
+
 static GTlsClientConnection *
 new_tls_connection (SoupConnection    *conn,
                     GSocketConnection *connection,
@@ -595,7 +624,7 @@ new_tls_connection (SoupConnection    *conn,
                 g_ptr_array_add (advertised_protocols, "h2");
                 break;
         default:
-                if (!priv->remote_address || !G_IS_PROXY_ADDRESS (priv->remote_address))
+                if (is_not_using_http_proxy (conn))
                         g_ptr_array_add (advertised_protocols, "h2");
                 g_ptr_array_add (advertised_protocols, "http/1.1");
                 g_ptr_array_add (advertised_protocols, "http/1.0");
@@ -794,6 +823,7 @@ soup_connection_connect_async (SoupConnection      *conn,
 
         priv->cancellable = cancellable ? g_object_ref (cancellable) : g_cancellable_new ();
         task = g_task_new (conn, priv->cancellable, callback, user_data);
+        g_task_set_source_tag (task, soup_connection_connect_async);
         g_task_set_priority (task, io_priority);
 
         client = new_socket_client (conn);
@@ -919,6 +949,7 @@ soup_connection_tunnel_handshake_async (SoupConnection     *conn,
 
         priv->cancellable = cancellable ? g_object_ref (cancellable) : g_cancellable_new ();
         task = g_task_new (conn, priv->cancellable, callback, user_data);
+        g_task_set_source_tag (task, soup_connection_tunnel_handshake_async);
         g_task_set_priority (task, io_priority);
 
         tls_connection = new_tls_connection (conn, G_SOCKET_CONNECTION (priv->connection), &error);
@@ -994,8 +1025,7 @@ soup_connection_disconnected (SoupConnection *conn)
         if (priv->connection) {
                 GIOStream *connection;
 
-                connection = priv->connection;
-                priv->connection = NULL;
+                connection = g_steal_pointer (&priv->connection);
 
                 g_io_stream_close (connection, NULL, NULL);
                 g_signal_handlers_disconnect_by_data (connection, conn);
@@ -1031,10 +1061,7 @@ soup_connection_disconnect (SoupConnection *conn)
 
         soup_connection_set_state (conn, SOUP_CONNECTION_DISCONNECTED);
 
-        if (priv->cancellable) {
-                g_cancellable_cancel (priv->cancellable);
-                priv->cancellable = NULL;
-        }
+        g_clear_pointer (&priv->cancellable, g_cancellable_cancel);
 
         if (priv->io_data &&
             soup_client_message_io_close_async (priv->io_data, conn, (GAsyncReadyCallback)client_message_io_closed_cb))
@@ -1083,8 +1110,7 @@ soup_connection_steal_iostream (SoupConnection *conn)
         g_socket_set_timeout (socket, 0);
 
         priv = soup_connection_get_instance_private (conn);
-        iostream = priv->iostream;
-        priv->iostream = NULL;
+        iostream = g_steal_pointer (&priv->iostream);
 
         g_object_set_data_full (G_OBJECT (iostream), "GSocket",
                                 g_object_ref (socket), g_object_unref);
@@ -1165,6 +1191,9 @@ soup_connection_set_in_use (SoupConnection *conn,
         if (g_atomic_int_dec_and_test (&priv->in_use)) {
                 clear_proxy_msg (conn);
 
+                if (soup_connection_get_state (conn) == SOUP_CONNECTION_DISCONNECTED)
+                        return;
+
                 if (soup_connection_is_reusable (conn))
                         soup_connection_set_state (conn, SOUP_CONNECTION_IDLE);
                 else
@@ -1186,8 +1215,26 @@ soup_connection_setup_message_io (SoupConnection *conn,
         if (priv->proxy_uri && soup_message_get_method (msg) == SOUP_METHOD_CONNECT)
                 set_proxy_msg (conn, msg);
 
-        if (!soup_client_message_io_is_reusable (priv->io_data))
-                g_warn_if_reached ();
+        if (!soup_client_message_io_is_reusable (priv->io_data)) {
+                /* The connection (typically a shared HTTP/2 session) failed
+                 * during its handshake while another queue item was
+                 * coalesced onto it via the CONNECTING fast-path in
+                 * soup-connection-manager. Returning the broken io_data
+                 * would propagate the original failure to every coalesced
+                 * message; instead, drop the connection and let the caller
+                 * re-queue the message onto a fresh one.
+                 */
+                g_debug ("soup_connection_setup_message_io: connection io is no longer reusable, will re-queue message");
+                return NULL;
+        }
+
+        return priv->io_data;
+}
+
+SoupClientMessageIO *
+soup_connection_get_io_data (SoupConnection *conn)
+{
+        SoupConnectionPrivate *priv = soup_connection_get_instance_private (conn);
 
         return priv->io_data;
 }
@@ -1376,4 +1423,38 @@ soup_connection_get_owner (SoupConnection *conn)
         SoupConnectionPrivate *priv = soup_connection_get_instance_private (conn);
 
         return priv->owner;
+}
+
+void
+soup_connection_set_http2_initial_window_size (SoupConnection *conn,
+                                               int             window_size)
+{
+        SoupConnectionPrivate *priv = soup_connection_get_instance_private (conn);
+
+        priv->window_size = window_size;
+}
+
+int
+soup_connection_get_http2_initial_window_size (SoupConnection *conn)
+{
+        SoupConnectionPrivate *priv = soup_connection_get_instance_private (conn);
+
+        return priv->window_size;
+}
+
+void
+soup_connection_set_http2_initial_stream_window_size (SoupConnection *conn,
+                                                      int             window_size)
+{
+        SoupConnectionPrivate *priv = soup_connection_get_instance_private (conn);
+
+        priv->stream_window_size = window_size;
+}
+
+int
+soup_connection_get_http2_initial_stream_window_size (SoupConnection *conn)
+{
+        SoupConnectionPrivate *priv = soup_connection_get_instance_private (conn);
+
+        return priv->stream_window_size;
 }

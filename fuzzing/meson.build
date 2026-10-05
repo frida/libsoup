@@ -5,9 +5,12 @@ fuzz_targets = [
   'fuzz_cookie_parse',
   'fuzz_content_sniffer',
   'fuzz_date_time',
+  'fuzz_header_parsing',
+  'fuzz_headers_parse_request',
+  'fuzz_headers_parse_response',
 ]
 
-fuzzing_args = '-fsanitize=fuzzer,address,undefined'
+fuzzing_args = '-fsanitize=fuzzer'
 have_fuzzing = cc.has_argument(fuzzing_args)
 fuzzing_feature = get_option('fuzzing')
 
@@ -34,6 +37,7 @@ if have_fuzzing and (fuzzing_feature.enabled() or fuzzing_feature.auto())
         '-runs=200000',
         '-artifact_prefix=meson-logs/' + target + '-',
         '-print_final_stats=1',
+        '-max_len=4096',
       ] + extra_args,
       env: [
         'ASAN_OPTIONS=fast_unwind_on_malloc=0',

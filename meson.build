@@ -1,6 +1,6 @@
 project('libsoup', 'c',
-        version: '3.3.0',
-        meson_version : '>= 0.60',
+        version: '3.8.0',
+        meson_version : '>= 0.62',
         license : 'LGPL-2.0-or-later',
         default_options : [
           'c_std=gnu99',
@@ -18,7 +18,7 @@ soup_version = meson.project_version()
 # - If binary compatibility has been broken (eg removed or changed interfaces)
 #   change to [C+1, 0, 0]
 # - If the interface is the same as the previous version, use [C, R+1, A].
-soup_version_info = [7, 0, 7]
+soup_version_info = [8, 0, 8]
 
 # Turn [C, R, A] into an actual usable *soversion*.
 soup_soversion_major = soup_version_info[0] - soup_version_info[2] # Current-Age
@@ -48,15 +48,6 @@ endif
 common_flags = [
   '-DHAVE_CONFIG_H',
 ]
-
-ndebug = get_option('b_ndebug')
-if ndebug == 'true' or (ndebug == 'if-release' and not get_option('debug'))
-  common_flags += [
-    '-DG_DISABLE_CAST_CHECKS',
-    '-DG_DISABLE_ASSERT',
-    '-DG_DISABLE_CHECKS',
-  ]
-endif
 
 cc = meson.get_compiler('c')
 
@@ -97,11 +88,7 @@ else
     test_cflags += ['-fno-omit-frame-pointer', '-fno-optimize-sibling-calls']
   endif
 
-  if meson.is_subproject()
-    common_flags += '-w'
-  else
-    common_flags += cc.get_supported_arguments(test_cflags)
-  endif
+  common_flags += cc.get_supported_arguments(test_cflags)
 endif
 
 if cc.get_id() != 'msvc' and host_system == 'windows'
@@ -111,10 +98,10 @@ endif
 
 add_project_arguments(common_flags, language : 'c')
 
-glib_required_version = '>= 2.69.1'
+glib_required_version = '>= 2.70.0'
 glib_dep = dependency('glib-2.0', version : glib_required_version,
                        fallback: ['glib', 'libglib_dep'])
-gmodule_dep = dependency('gmodule-2.0', version : glib_required_version,
+gmodule_dep = dependency('gmodule-no-export-2.0', version : glib_required_version,
                          fallback: ['glib', 'libgmodule_dep'])
 gobject_dep = dependency('gobject-2.0', version : glib_required_version,
                        fallback: ['glib', 'libgobject_dep'])
@@ -125,11 +112,11 @@ glib_deps = [glib_dep, gmodule_dep, gobject_dep, gio_dep]
 
 cdata = configuration_data()
 
+cdata.set('GLIB_VERSION_MAX_ALLOWED', 'GLIB_VERSION_2_70')
+cdata.set('GLIB_VERSION_MIN_REQUIRED', 'GLIB_VERSION_2_70')
+
 libnghttp2_dep = dependency('libnghttp2')
-if libnghttp2_dep.type_name() == 'internal' \
-      or cc.has_function('nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation',
-                         prefix : '#include <nghttp2/nghttp2.h>',
-                         dependencies : libnghttp2_dep)
+if (libnghttp2_dep.version() == 'unknown' and (libnghttp2_dep.type_name() == 'internal' or cc.has_function('nghttp2_option_set_no_rfc9113_leading_and_trailing_ws_validation', prefix : '#include <nghttp2/nghttp2.h>', dependencies : libnghttp2_dep))) or libnghttp2_dep.version().version_compare('>=1.50')
     cdata.set('HAVE_NGHTTP2_OPTION_SET_NO_RFC9113_LEADING_AND_TRAILING_WS_VALIDATION', '1')
 endif
 
@@ -148,34 +135,41 @@ if not sqlite_dep.found()
 endif
 
 brotlidec_dep = dependency('libbrotlidec', required : get_option('brotli'))
+brotlienc_dep = dependency('libbrotlienc', required : get_option('brotli'))
 if brotlidec_dep.found()
   cdata.set('WITH_BROTLI', true)
 endif
 
+libzstd_dep = dependency('libzstd', required : get_option('zstd'), version: '>= 1.4.0')
+if libzstd_dep.found()
+  cdata.set('WITH_ZSTD', true)
+endif
+
 unix_socket_dep = dependency('gio-unix-2.0',
                              version : glib_required_version,
-                             fallback: ['glib', 'libgiounix_dep'],
+                             fallback: (host_system != 'windows') ? ['glib', 'libgiounix_dep'] : [],
                              required : false)
 
 platform_deps = []
 is_static_library = get_option('default_library') == 'static'
 if not is_static_library
   if host_machine.system() == 'windows'
-    platform_deps = [cc.find_library('ws2_32')]
+    platform_deps += [cc.find_library('ws2_32')]
     cdata.set('DLL_EXPORT', true)
     cdata.set('_SOUP_EXTERN', '__declspec(dllexport) extern')
   else
+    platform_deps += [cc.find_library('dl', required: false)]
     cdata.set('_SOUP_EXTERN', '__attribute__((visibility("default"))) extern')
   endif
 endif
 
 libpsl_required_version = '>= 0.20'
 libpsl_dep = dependency('libpsl', version : libpsl_required_version,
-  default_options : [
-    'runtime=no',
-    'builtin=false',
-    'tests=false',
-  ])
+  fallback : ['libpsl', 'libpsl_dep'])
+
+if cc.has_header('dlfcn.h')
+    cdata.set('HAVE_DLFCN_H', '1')
+endif
 
 if cc.has_function('gmtime_r', prefix : '#include <time.h>', args : default_source_flag)
     cdata.set('HAVE_GMTIME_R', '1')
@@ -237,8 +231,6 @@ endif
 # Regression tests dependencies #
 #################################
 
-if get_option('tests')
-
 # The situation here is a little bit complicated. For running some of the tests
 # we need the Apache's httpd binary. As we want to know more about its
 # configuration we have to run it and parse the output. But here is the first
@@ -261,18 +253,18 @@ apache_httpd2 = find_program('httpd2', 'httpd', 'apache2', 'apache',
 have_apache=false
 apache_httpd2_version = ''
 if apache_httpd2.found() and apachectl.found()
-  apache_httpd2_version_raw = run_command(apachectl.path(), '-v', check: false)
+  apache_httpd2_version_raw = run_command(apachectl.full_path(), '-v', check: false)
   # It seems that from version 2.4.39 apachectl doesn't take arguments, fallback
   # to calling apache directly just in case.
   if apache_httpd2_version_raw.returncode() != 0
-    apache_httpd2_version_raw = run_command(apache_httpd2.path(), '-v', check: false)
+    apache_httpd2_version_raw = run_command(apache_httpd2.full_path(), '-v', check: false)
   endif
   if apache_httpd2_version_raw.returncode() == 0
     apache_httpd2_version = apache_httpd2_version_raw.stdout().split('\n')[0]
     apache_httpd2_version = apache_httpd2_version.split('/')[1].split(' ')[0]
     if apache_httpd2_version.version_compare('>=2.4')
       have_apache = true
-      cdata.set_quoted('APACHE_HTTPD', apache_httpd2.path())
+      cdata.set_quoted('APACHE_HTTPD', apache_httpd2.full_path())
     else
       message('Found ' + apache_httpd2_version + ', but at least 2.4 is needed - ignoring')
     endif
@@ -280,11 +272,11 @@ if apache_httpd2.found() and apachectl.found()
 endif
 
 if have_apache
-  apache_modules_dirs_out = run_command('get_apache_modules_dirs.py', apachectl.path(), check: false)
+  apache_modules_dirs_out = run_command('get_apache_modules_dirs.py', apachectl.full_path(), check: false)
   have_apache = (apache_modules_dirs_out.returncode() == 0)
   # Same as above, using apachectl might fail, try apache directly.
   if not have_apache
-    apache_modules_dirs_out = run_command('get_apache_modules_dirs.py', apache_httpd2.path(), check: false)
+    apache_modules_dirs_out = run_command('get_apache_modules_dirs.py', apache_httpd2.full_path(), check: false)
     have_apache = (apache_modules_dirs_out.returncode() == 0)
   endif
   if have_apache
@@ -318,17 +310,10 @@ if not have_apache or not have_autobahn or not gnutls_dep.found()
   warning('Some regression tests will not be compiled due to missing libraries or modules. Please check the logs for more details.')
 endif
 
-else
-  have_apache = false
-  have_autobahn = false
-  gnutls_dep = disabler()
-endif
-
 ##################
 # GSSAPI support #
 ##################
 gssapi_opt = get_option('gssapi')
-enable_gssapi = false
 if cc.get_id() == 'msvc'
   if host_machine.cpu_family() == 'x86'
     gssapi_lib_type = '32'
@@ -338,30 +323,11 @@ if cc.get_id() == 'msvc'
   gssapi_dep = cc.find_library('gssapi' + gssapi_lib_type,
     has_headers: 'gssapi/gssapi.h',
     required: gssapi_opt)
-  if gssapi_dep.found()
-      enable_gssapi = true
-  endif
 else
-  krb5_config_path = get_option('krb5_config')
-  if not meson.is_cross_build() and krb5_config_path == ''
-    krb5_config_path = 'krb5-config'
-  endif
-  krb5_config = find_program(krb5_config_path, required : gssapi_opt)
-  if krb5_config.found()
-    libs_output = run_command(krb5_config, '--libs', 'gssapi', check: gssapi_opt.enabled())
-    cflags_output = run_command(krb5_config, '--cflags', 'gssapi', check: gssapi_opt.enabled())
-    if libs_output.returncode() == 0 and cflags_output.returncode() == 0
-      enable_gssapi = true
-      gssapi_dep = declare_dependency(
-        link_args: libs_output.stdout().split(),
-        compile_args: cflags_output.stdout().split())
-    endif
-  else
-    gssapi_dep = dependency('', required: false)
-  endif
+  gssapi_dep = dependency('krb5-gssapi', required: gssapi_opt)
 endif
 
-if enable_gssapi
+if gssapi_dep.found()
   add_project_arguments('-DLIBSOUP_HAVE_GSSAPI=1', language : 'c')
 endif
 
@@ -374,7 +340,7 @@ if host_machine.system() != 'windows'
 
   if ntlm_auth.found()
     add_project_arguments('-DUSE_NTLM_AUTH=1', language : 'c')
-    add_project_arguments('-DNTLM_AUTH="' + ntlm_auth.path() + '"', language : 'c')
+    add_project_arguments('-DNTLM_AUTH="' + ntlm_auth.full_path() + '"', language : 'c')
   endif
 else
   ntlm_auth = dependency('', required: false)
@@ -402,6 +368,10 @@ configinc = include_directories('.')
 
 prefix = get_option('prefix')
 
+if get_option('b_sanitize') != 'none'
+  cdata.set_quoted('B_SANITIZE_OPTION', get_option('b_sanitize'))
+endif
+
 cdata.set_quoted('PACKAGE_VERSION', soup_version)
 cdata.set_quoted('LOCALEDIR', join_paths(prefix, get_option('localedir')))
 cdata.set_quoted('GETTEXT_PACKAGE', libsoup_api_name)
@@ -414,9 +384,7 @@ if xgettext.found()
   subdir('po')
 endif
 
-if get_option('examples').disable_auto_if(meson.is_subproject()).allowed()
-  subdir('examples')
-endif
+subdir('examples')
 subdir('fuzzing')
 if get_option('tests')
   subdir('tests')
@@ -434,9 +402,10 @@ summary({
 )
 
 summary({
-    'GSSAPI' : enable_gssapi,
+    'GSSAPI' : gssapi_dep.found(),
     'NTLM' : ntlm_auth.found(),
     'Brotli' : brotlidec_dep.found(),
+    'zstd' : libzstd_dep.found(),
     'Translations' : xgettext.found(),
     'GIR' : enable_introspection,
     'VAPI' : enable_vapi,

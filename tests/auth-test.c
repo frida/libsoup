@@ -1,6 +1,7 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 
 #include "test-utils.h"
+#include "soup-uri-utils-private.h"
 
 static const char *base_uri;
 static GMainLoop *loop;
@@ -185,7 +186,8 @@ identify_auth (SoupMessage *msg)
 			num = 0;
 	}
 
-	g_assert (num >= 0 && num <= 4);
+	g_assert_cmpint (num, >=, 0);
+	g_assert_cmpint (num, <=, 4);
 
 	return num;
 }
@@ -311,7 +313,7 @@ do_pipelined_auth_test (void)
 		g_object_set_data (G_OBJECT (msg), "#", GINT_TO_POINTER (i + 1));
 		g_signal_connect (msg, "authenticate",
 				  G_CALLBACK (bug271540_authenticate), &authenticated);
-		g_signal_connect (msg, "wrote_headers",
+		g_signal_connect (msg, "wrote-headers",
 				  G_CALLBACK (bug271540_sent), &authenticated);
 
 		g_signal_connect (msg, "finished",
@@ -758,7 +760,7 @@ static gboolean
 async_authenticate_cancel_idle (AsyncAuthCancelData *data)
 {
 	g_cancellable_cancel (data->cancellable);
-	return FALSE;
+	return G_SOURCE_REMOVE;
 }
 
 static gboolean
@@ -795,6 +797,7 @@ do_async_auth_cancel_test (void)
 	g_assert_null (soup_test_session_async_send (session, msg, data.cancellable, &error));
 	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
 
+	g_error_free (error);
 	g_object_unref (data.auth);
 	g_object_unref (data.cancellable);
 	g_object_unref (msg);
@@ -1106,7 +1109,7 @@ auth_close_idle_authenticate (gpointer user_data)
 	soup_auth_authenticate (acd->auth, "user", "good-basic");
 
 	g_object_unref (acd->auth);
-	return FALSE;
+	return G_SOURCE_REMOVE;
 }
 
 static gboolean
@@ -1169,7 +1172,7 @@ static gboolean
 infinite_cancel (gpointer session)
 {
 	soup_session_abort (session);
-	return FALSE;
+	return G_SOURCE_REMOVE;
 }
 
 static gboolean
@@ -1641,6 +1644,7 @@ request_send_cb (SoupSession  *session,
         g_assert_null (stream);
         g_assert_error (error, G_IO_ERROR, G_IO_ERROR_CANCELLED);
 
+	g_error_free (error);
         g_main_loop_quit (loop);
 }
 
@@ -1866,6 +1870,131 @@ do_multiple_digest_algorithms (void)
 	soup_test_server_quit_unref (server);
 }
 
+static void
+on_request_read_for_missing_params (SoupServer        *server,
+                                      SoupServerMessage *msg,
+                                      gpointer           user_data)
+{
+        const char *auth_header = user_data;
+        SoupMessageHeaders *response_headers = soup_server_message_get_response_headers (msg);
+        soup_message_headers_replace (response_headers, "WWW-Authenticate", auth_header);
+}
+
+static void
+do_missing_params_test (gconstpointer auth_header)
+{
+        SoupSession *session;
+        SoupMessage *msg;
+        SoupServer *server;
+        SoupAuthDomain *digest_auth_domain;
+        gint status;
+        GUri *uri;
+
+        server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
+	soup_server_add_handler (server, NULL,
+				 server_callback, NULL, NULL);
+	uri = soup_test_server_get_uri (server, "http", NULL);
+
+	digest_auth_domain = soup_auth_domain_digest_new (
+		"realm", "auth-test",
+		"auth-callback", server_digest_auth_callback,
+		NULL);
+        soup_auth_domain_add_path (digest_auth_domain, "/");
+	soup_server_add_auth_domain (server, digest_auth_domain);
+        g_object_unref (digest_auth_domain);
+
+        g_signal_connect (server, "request-read",
+                          G_CALLBACK (on_request_read_for_missing_params),
+                          (gpointer)auth_header);
+
+        session = soup_test_session_new (NULL);
+        msg = soup_message_new_from_uri ("GET", uri);
+        g_signal_connect (msg, "authenticate",
+                          G_CALLBACK (on_digest_authenticate),
+                          NULL);
+
+        status = soup_test_session_send_message (session, msg);
+
+        g_assert_cmpint (status, ==, SOUP_STATUS_UNAUTHORIZED);
+	g_uri_unref (uri);
+	soup_test_server_quit_unref (server);
+}
+
+static void
+redirect_server_callback (SoupServer        *server,
+                          SoupServerMessage *msg,
+                          const char        *path,
+                          GHashTable        *query,
+                          gpointer           user_data)
+{
+    static gboolean redirected = FALSE;
+
+    if (!redirected) {
+        char *redirect_uri = g_uri_to_string (user_data);
+        soup_server_message_set_redirect (msg, SOUP_STATUS_MOVED_PERMANENTLY, redirect_uri);
+        g_free (redirect_uri);
+        redirected = TRUE;
+        return;
+    }
+
+    g_assert_cmpstr ("This code", ==, "should not be reached");
+}
+
+static gboolean
+auth_for_redirect_callback (SoupMessage *msg, SoupAuth *auth, gboolean retrying, gpointer user_data)
+{
+    GUri *known_server_uri = user_data;
+
+    if (!soup_uri_host_equal (known_server_uri, soup_message_get_uri (msg)))
+        return FALSE;
+
+    soup_auth_authenticate (auth, "user", "good-basic");
+
+    return TRUE;
+}
+
+static void
+do_strip_on_crossorigin_redirect (void)
+{
+    SoupSession *session;
+    SoupMessage *msg;
+    SoupServer *server1, *server2;
+    SoupAuthDomain *auth_domain;
+    GUri *uri;
+    gint status;
+
+    server1 = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
+    server2 = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
+
+    /* Both servers have the same credentials. */
+    auth_domain = soup_auth_domain_basic_new ("realm", "auth-test", "auth-callback", server_basic_auth_callback, NULL);
+    soup_auth_domain_add_path (auth_domain, "/");
+    soup_server_add_auth_domain (server1, auth_domain);
+    soup_server_add_auth_domain (server2, auth_domain);
+    g_object_unref (auth_domain);
+
+    /* Server 1 asks for auth, then redirects to Server 2. */
+    soup_server_add_handler (server1, NULL,
+                    redirect_server_callback,
+                   soup_test_server_get_uri (server2, "http", NULL), (GDestroyNotify)g_uri_unref);
+    /* Server 2 requires auth. */
+    soup_server_add_handler (server2, NULL, server_callback, NULL, NULL);
+
+    session = soup_test_session_new (NULL);
+    uri = soup_test_server_get_uri (server1, "http", NULL);
+    msg = soup_message_new_from_uri ("GET", uri);
+    /* The client only sends credentials for the host it knows. */
+    g_signal_connect (msg, "authenticate", G_CALLBACK (auth_for_redirect_callback), uri);
+
+    status = soup_test_session_send_message (session, msg);
+
+    g_assert_cmpint (status, ==, SOUP_STATUS_UNAUTHORIZED);
+
+    g_uri_unref (uri);
+    soup_test_server_quit_unref (server1);
+    soup_test_server_quit_unref (server2);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1899,6 +2028,11 @@ main (int argc, char **argv)
 	g_test_add_func ("/auth/auth-uri", do_auth_uri_test);
         g_test_add_func ("/auth/cancel-request-on-authenticate", do_cancel_request_on_authenticate);
         g_test_add_func ("/auth/multiple-algorithms", do_multiple_digest_algorithms);
+        g_test_add_func ("/auth/strip-on-crossorigin-redirect", do_strip_on_crossorigin_redirect);
+        g_test_add_data_func ("/auth/missing-params/realm", "Digest qop=\"auth\"", do_missing_params_test);
+        g_test_add_data_func ("/auth/missing-params/nonce", "Digest realm=\"auth-test\", qop=\"auth,auth-int\", opaque=\"5ccc069c403ebaf9f0171e9517f40e41\"", do_missing_params_test);
+        g_test_add_data_func ("/auth/missing-params/nonce-md5-sess", "Digest realm=\"auth-test\", qop=\"auth,auth-int\", opaque=\"5ccc069c403ebaf9f0171e9517f40e41\" algorithm=\"MD5-sess\"", do_missing_params_test);
+        g_test_add_data_func ("/auth/missing-params/nonce-and-qop", "Digest realm=\"auth-test\"", do_missing_params_test);
 
 	ret = g_test_run ();
 

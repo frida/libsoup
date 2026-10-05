@@ -15,6 +15,7 @@
 #include "soup.h"
 #include "soup-connection-auth.h"
 #include "soup-message-private.h"
+#include "soup-connection.h"
 #include "soup-message-headers-private.h"
 #include "soup-path-map.h"
 #include "soup-session-private.h"
@@ -26,10 +27,10 @@
  *
  * HTTP client-side authentication handler.
  *
- * #SoupAuthManager is the [iface@SessionFeature] that handles HTTP
+ * [class@AuthManager] is the [iface@SessionFeature] that handles HTTP
  * authentication for a [class@Session].
  *
- * A #SoupAuthManager is added to the session by default, and normally
+ * A [class@AuthManager] is added to the session by default, and normally
  * you don't need to worry about it at all. However, if you want to
  * disable HTTP authentication, you can remove the feature from the
  * session with [method@Session.remove_feature_by_type] or disable it on
@@ -40,7 +41,7 @@
  *
  * (Although this type has only been publicly visible since libsoup 2.42, it has
  * always existed in the background, and you can use `g_type_from_name
- * ("SoupAuthManager")` to get its [alias@GLib.Type] in earlier releases.)
+ * ("SoupAuthManager")` to get its [alias@GObject.Type] in earlier releases.)
  **/
 static void soup_auth_manager_session_feature_init (SoupSessionFeatureInterface *feature_interface, gpointer interface_data);
 
@@ -51,9 +52,9 @@ struct _SoupAuthManager {
 typedef struct {
 	SoupSession *session;
 	GPtrArray *auth_types;
-	gboolean auto_ntlm;
 
 	SoupAuth *proxy_auth;
+	char *proxy_auth_authority;
         GMutex mutex;
 	GHashTable *auth_hosts;
 } SoupAuthManagerPrivate;
@@ -97,6 +98,7 @@ soup_auth_manager_finalize (GObject *object)
 	g_hash_table_destroy (priv->auth_hosts);
 
 	g_clear_object (&priv->proxy_auth);
+	g_clear_pointer (&priv->proxy_auth_authority, g_free);
 
         g_mutex_clear (&priv->mutex);
 
@@ -133,13 +135,6 @@ soup_auth_manager_add_feature (SoupSessionFeature *feature, GType type)
 	g_ptr_array_add (priv->auth_types, auth_class);
 	g_ptr_array_sort (priv->auth_types, auth_type_compare_func);
 
-	/* Plain SoupSession does not get the backward-compat
-	 * auto-NTLM behavior; SoupSession subclasses do.
-	 */
-	if (type == SOUP_TYPE_AUTH_NTLM &&
-	    G_TYPE_FROM_INSTANCE (priv->session) != SOUP_TYPE_SESSION)
-		priv->auto_ntlm = TRUE;
-
 	return TRUE;
 }
 
@@ -157,9 +152,6 @@ soup_auth_manager_remove_feature (SoupSessionFeature *feature, GType type)
 
 	for (i = 0; i < priv->auth_types->len; i++) {
 		if (priv->auth_types->pdata[i] == (gpointer)auth_class) {
-			if (type == SOUP_TYPE_AUTH_NTLM)
-				priv->auto_ntlm = FALSE;
-
 			g_ptr_array_remove_index (priv->auth_types, i);
 			return TRUE;
 		}
@@ -406,25 +398,6 @@ soup_auth_host_free (SoupAuthHost *host)
 	g_slice_free (SoupAuthHost, host);
 }
 
-static gboolean
-make_auto_ntlm_auth (SoupAuthManagerPrivate *priv, SoupAuthHost *host)
-{
-	SoupAuth *auth;
-	char *authority;
-
-	if (!priv->auto_ntlm)
-		return FALSE;
-
-	authority = g_strdup_printf ("%s:%d", g_uri_get_host (host->uri), g_uri_get_port (host->uri));
-	auth = g_object_new (SOUP_TYPE_AUTH_NTLM,
-			     "authority", authority,
-			     NULL);
-	record_auth_for_uri (priv, host->uri, auth, FALSE);
-	g_object_unref (auth);
-	g_free (authority);
-	return TRUE;
-}
-
 static void
 update_authorization_header (SoupMessage *msg, SoupAuth *auth, gboolean is_proxy)
 {
@@ -441,7 +414,7 @@ update_authorization_header (SoupMessage *msg, SoupAuth *auth, gboolean is_proxy
 	if (!token)
 		return;
 
-	soup_message_headers_replace_common (soup_message_get_request_headers (msg), authorization_header, token);
+	soup_message_headers_replace_common (soup_message_get_request_headers (msg), authorization_header, token, SOUP_HEADER_VALUE_TRUSTED);
 	g_free (token);
 }
 
@@ -466,14 +439,6 @@ lookup_auth (SoupAuthManagerPrivate *priv, SoupMessage *msg)
 		return NULL;
 
 	host = get_auth_host_for_uri (priv, uri);
-	if (!host->auth_realms && !make_auto_ntlm_auth (priv, host))
-		return NULL;
-
-	/* Cannot change the above '&&' into '||', because make_auto_ntlm_auth() is used
-	 * to populate host->auth_realms when it's not set yet. Even the make_auto_ntlm_auth()
-	 * returns TRUE only if it also populates the host->auth_realms, this extra test
-	 * is required to mute a FORWARD_NULL Coverity Scan warning, which is a false-positive
-	 * here */
 	if (!host->auth_realms)
 		return NULL;
 
@@ -487,20 +452,60 @@ lookup_auth (SoupAuthManagerPrivate *priv, SoupMessage *msg)
 	return NULL;
 }
 
+static char *
+get_proxy_authority (SoupMessage *msg)
+{
+	SoupConnection *conn = soup_message_get_connection (msg);
+	GUri *proxy_uri;
+	char *authority = NULL;
+
+	if (!conn)
+		return NULL;
+
+	proxy_uri = soup_connection_get_proxy_uri (conn);
+	if (proxy_uri)
+		authority = g_strdup_printf ("%s:%d", g_uri_get_host (proxy_uri), g_uri_get_port (proxy_uri));
+
+	g_object_unref (conn);
+
+	return authority;
+}
+
+static gboolean
+proxy_auth_matches_msg (SoupAuthManagerPrivate *priv, SoupMessage *msg)
+{
+	char *authority = get_proxy_authority (msg);
+	gboolean matches;
+
+	matches = authority && priv->proxy_auth_authority &&
+		  g_strcmp0 (authority, priv->proxy_auth_authority) == 0;
+	g_free (authority);
+
+	return matches;
+}
+
 static SoupAuth *
 lookup_proxy_auth (SoupAuthManagerPrivate *priv, SoupMessage *msg)
 {
 	SoupAuth *auth;
 
-	/* If the message already has a ready auth, use that instead */
+	/* If the message already has a ready auth, use that instead, but only
+	 * if it is still for the proxy this connection actually goes through.
+	 */
 	auth = soup_message_get_proxy_auth (msg);
-	if (auth && soup_auth_is_ready (auth, msg))
+	if (auth && soup_auth_is_ready (auth, msg) && proxy_auth_matches_msg (priv, msg))
 		return auth;
 
 	if (soup_message_query_flags (msg, SOUP_MESSAGE_DO_NOT_USE_AUTH_CACHE))
 		return NULL;
 
-	return priv->proxy_auth;
+	/* Only reuse the cached proxy credentials for the same proxy they were
+	 * obtained from, otherwise switching proxies would leak them.
+	 */
+	if (priv->proxy_auth && proxy_auth_matches_msg (priv, msg))
+		return priv->proxy_auth;
+
+	return NULL;
 }
 
 static void
@@ -641,8 +646,7 @@ auth_got_headers (SoupMessage *msg, gpointer manager)
 
 		new_auth = record_auth_for_uri (priv, soup_message_get_uri_for_auth (msg),
 						auth, prior_auth_failed);
-		g_object_unref (auth);
-		auth = g_object_ref (new_auth);
+		g_set_object (&auth, new_auth);
 	}
 
         g_mutex_unlock (&priv->mutex);
@@ -695,8 +699,9 @@ proxy_auth_got_headers (SoupMessage *msg, gpointer manager)
 			prior_auth_failed = TRUE;
 	}
 
-	if (!soup_message_query_flags (msg, SOUP_MESSAGE_DO_NOT_USE_AUTH_CACHE))
-		auth = priv->proxy_auth ? g_object_ref (priv->proxy_auth) : NULL;
+	if (!soup_message_query_flags (msg, SOUP_MESSAGE_DO_NOT_USE_AUTH_CACHE) &&
+	    priv->proxy_auth && proxy_auth_matches_msg (priv, msg))
+		auth = g_object_ref (priv->proxy_auth);
 
 	if (!auth) {
 		auth = create_auth (priv, msg);
@@ -705,8 +710,11 @@ proxy_auth_got_headers (SoupMessage *msg, gpointer manager)
 			return;
                 }
 
-		if (!soup_message_query_flags (msg, SOUP_MESSAGE_DO_NOT_USE_AUTH_CACHE))
-			priv->proxy_auth = g_object_ref (auth);
+		if (!soup_message_query_flags (msg, SOUP_MESSAGE_DO_NOT_USE_AUTH_CACHE)) {
+			g_set_object (&priv->proxy_auth, auth);
+			g_free (priv->proxy_auth_authority);
+			priv->proxy_auth_authority = get_proxy_authority (msg);
+		}
 	}
 
         g_mutex_unlock (&priv->mutex);
@@ -744,6 +752,8 @@ auth_msg_starting (SoupMessage *msg, gpointer manager)
 {
         SoupAuthManagerPrivate *priv = soup_auth_manager_get_instance_private (manager);
 	SoupAuth *auth;
+	SoupConnection *conn;
+	gboolean tunnelled;
 
 	if (soup_message_query_flags (msg, SOUP_MESSAGE_DO_NOT_USE_AUTH_CACHE))
 		return;
@@ -759,6 +769,23 @@ auth_msg_starting (SoupMessage *msg, gpointer manager)
 		}
 		soup_message_set_auth (msg, auth);
 		update_authorization_header (msg, auth, FALSE);
+	}
+
+	/* Proxy-Authorization must only be sent to the proxy itself, never on
+	 * a request travelling through an established CONNECT tunnel to the
+	 * origin server, which would leak the proxy credentials to the origin.
+	 * The CONNECT request that sets the tunnel up is addressed to the
+	 * proxy, so it still needs the header.
+	 */
+	conn = soup_message_get_connection (msg);
+	tunnelled = conn && soup_connection_is_tunnelled (conn) &&
+		    soup_message_get_method (msg) != SOUP_METHOD_CONNECT;
+	g_clear_object (&conn);
+	if (tunnelled) {
+		soup_message_set_proxy_auth (msg, NULL);
+		update_authorization_header (msg, NULL, TRUE);
+		g_mutex_unlock (&priv->mutex);
+		return;
 	}
 
 	auth = lookup_proxy_auth (priv, msg);

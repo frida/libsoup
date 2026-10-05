@@ -1,7 +1,8 @@
 /* -*- Mode: C; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 8 -*- */
 
-#include <gio/gio.h>
 #include "test-utils.h"
+
+#include <gio/gio.h>
 
 typedef struct {
 	const char *explanation;
@@ -268,6 +269,39 @@ do_proxy_redirect_test (void)
 	soup_test_session_abort_unref (session);
 }
 
+static void proxy_auth_redirect_message_restarted (SoupMessage *msg)
+{
+        if (soup_message_get_status (msg) != SOUP_STATUS_MOVED_PERMANENTLY)
+                return;
+
+        g_assert_null (soup_message_headers_get_one (soup_message_get_request_headers (msg), "Proxy-Authorization"));
+}
+
+static void
+do_proxy_auth_redirect_test (void)
+{
+        SoupSession *session;
+        SoupMessage *msg;
+        char *url;
+
+        SOUP_TEST_SKIP_IF_NO_APACHE;
+        SOUP_TEST_SKIP_IF_NO_TLS;
+
+        session = soup_test_session_new ("proxy-resolver", proxy_resolvers[AUTH_PROXY], NULL);
+
+        url = g_strconcat (HTTP_SERVER, "/Basic/realm1/redirected", NULL);
+        msg = soup_message_new (SOUP_METHOD_GET, url);
+        g_signal_connect (msg, "authenticate", G_CALLBACK (authenticate), NULL);
+        g_signal_connect (msg, "restarted", G_CALLBACK (proxy_auth_redirect_message_restarted), NULL);
+
+        soup_test_session_send_message (session, msg);
+        soup_test_assert_message_status (msg, SOUP_STATUS_OK);
+
+        g_free (url);
+        g_object_unref (msg);
+        soup_test_session_abort_unref (session);
+}
+
 static void
 do_proxy_auth_request (const char *url, SoupSession *session, gboolean do_read)
 {
@@ -372,6 +406,52 @@ do_proxy_connect_error_test (gconstpointer data)
         soup_test_session_abort_unref (session);
 }
 
+static void
+connect_message_wrote_headers_cb (SoupMessage *msg, guint *counter)
+{
+        SoupMessageHeaders *hdrs;
+
+        *counter += 1;
+
+        hdrs = soup_message_get_request_headers (msg);
+        if (soup_message_get_method (msg) == SOUP_METHOD_CONNECT)
+                g_assert_null (soup_message_headers_get_one (hdrs, "Cookie"));
+        else
+                g_assert_nonnull (soup_message_headers_get_one (hdrs, "Cookie"));
+}
+
+static void
+request_queued_cb (SoupSession *session, SoupMessage *msg, guint *counter)
+{
+        g_signal_connect (msg, "wrote-headers", G_CALLBACK (connect_message_wrote_headers_cb), counter);
+}
+
+static void
+do_proxy_secure_cookies_test (void)
+{
+        SoupSession *session;
+        SoupMessage *msg;
+        SoupCookieJar *jar;
+        guint counter = 0;
+
+        SOUP_TEST_SKIP_IF_NO_APACHE;
+        SOUP_TEST_SKIP_IF_NO_TLS;
+
+        session = soup_test_session_new ("proxy-resolver", proxy_resolvers[SIMPLE_PROXY], NULL);
+        g_signal_connect (session, "request-queued", G_CALLBACK (request_queued_cb), &counter);
+
+        soup_session_add_feature_by_type (session, SOUP_TYPE_COOKIE_JAR);
+        jar = SOUP_COOKIE_JAR (soup_session_get_feature (session, SOUP_TYPE_COOKIE_JAR));
+
+        msg = soup_message_new (SOUP_METHOD_GET, HTTPS_SERVER);
+        soup_cookie_jar_set_cookie (jar, soup_message_get_uri (msg), "user=password; secure");
+        soup_test_session_send_message (session, msg);
+        soup_test_assert_message_status (msg, SOUP_STATUS_OK);
+        g_assert_cmpuint (counter, ==, 2);
+
+        soup_test_session_abort_unref (session);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -401,8 +481,10 @@ main (int argc, char **argv)
 
 	g_test_add_data_func ("/proxy/fragment", base_uri, do_proxy_fragment_test);
 	g_test_add_func ("/proxy/redirect", do_proxy_redirect_test);
+        g_test_add_func ("/proxy/auth-redirect", do_proxy_auth_redirect_test);
 	g_test_add_func ("/proxy/auth-cache", do_proxy_auth_cache_test);
         g_test_add_data_func ("/proxy/connect-error", base_https_uri, do_proxy_connect_error_test);
+        g_test_add_func ("/proxy/secure-cookies", do_proxy_secure_cookies_test);
 
 	ret = g_test_run ();
 

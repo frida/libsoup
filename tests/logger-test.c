@@ -132,10 +132,11 @@ do_logger_headers_test (void)
         g_object_unref (msg);
 
         g_assert_nonnull (log.request);
-        g_assert_cmpuint (g_hash_table_size (log.request), ==, 6);
+        g_assert_cmpuint (g_hash_table_size (log.request), ==, 7);
         g_assert_true (g_hash_table_contains (log.request, "status-line"));
         g_assert_true (g_hash_table_contains (log.request, "Soup-Debug-Timestamp"));
         g_assert_true (g_hash_table_contains (log.request, "Soup-Debug"));
+        g_assert_true (g_hash_table_contains (log.request, "Soup-Host"));
         g_assert_true (g_hash_table_contains (log.request, "Host"));
         g_assert_true (g_hash_table_contains (log.request, "Accept-Encoding"));
         g_assert_true (g_hash_table_contains (log.request, "Connection"));
@@ -202,10 +203,11 @@ do_logger_body_test (void)
         g_object_unref (msg);
 
         g_assert_nonnull (log.request);
-        g_assert_cmpuint (g_hash_table_size (log.request), ==, 7);
+        g_assert_cmpuint (g_hash_table_size (log.request), ==, 8);
         g_assert_true (g_hash_table_contains (log.request, "status-line"));
         g_assert_true (g_hash_table_contains (log.request, "Soup-Debug-Timestamp"));
         g_assert_true (g_hash_table_contains (log.request, "Soup-Debug"));
+        g_assert_true (g_hash_table_contains (log.request, "Soup-Host"));
         g_assert_true (g_hash_table_contains (log.request, "Host"));
         g_assert_true (g_hash_table_contains (log.request, "Accept-Encoding"));
         g_assert_true (g_hash_table_contains (log.request, "Connection"));
@@ -321,7 +323,7 @@ do_logger_filters_test (void)
         g_object_unref (msg);
 
         g_assert_nonnull (log.request);
-        g_assert_cmpuint (g_hash_table_size (log.request), ==, 6);
+        g_assert_cmpuint (g_hash_table_size (log.request), ==, 7);
         g_assert_nonnull (log.response);
         g_assert_cmpuint (g_hash_table_size (log.response), ==, 3);
         g_assert_null (log.request_body);
@@ -464,6 +466,49 @@ do_logger_preconnect_test (void)
 }
 
 static void
+do_logger_long_invalid_body_length_test (void)
+{
+        SoupSession *session;
+        SoupLogger *logger;
+        GUri *uri;
+        SoupMessage *msg;
+        GInputStream *body;
+        GError *error = NULL;
+        LogData log = { NULL, NULL, NULL, NULL };
+
+        session = soup_test_session_new (NULL);
+
+        logger = soup_logger_new (SOUP_LOGGER_LOG_BODY);
+        soup_logger_set_printer (logger, (SoupLoggerPrinter)printer, &log, NULL);
+        soup_session_add_feature (session, SOUP_SESSION_FEATURE (logger));
+
+        uri = g_uri_parse_relative (base_uri, "/long-invalid-body-length", SOUP_HTTP_URI_FLAGS, NULL);
+        msg = soup_message_new_from_uri ("GET", uri);
+
+        body = soup_session_send (session, msg, NULL, NULL);
+        g_assert_nonnull (body);
+
+        while (TRUE) {
+                gssize skip = g_input_stream_skip (body, 8192, NULL, &error);
+                if (skip <= 0)
+                        break;
+        }
+
+        g_assert_no_error (error);
+
+        g_object_unref (body);
+        g_object_unref (msg);
+        g_uri_unref (uri);
+
+        g_assert_nonnull (log.response_body);
+        g_assert_cmpuint (log.response_body->len, ==, sizeof (char) * G_MAXINT32 + 1);
+
+        log_data_clear (&log);
+        g_object_unref (logger);
+        soup_test_session_abort_unref (session);
+}
+
+static void
 server_callback (SoupServer        *server,
                  SoupServerMessage *msg,
                  const char        *path,
@@ -473,6 +518,19 @@ server_callback (SoupServer        *server,
         if (g_str_equal (path, "/cookies")) {
                 soup_message_headers_replace (soup_server_message_get_response_headers (msg),
                                               "Set-Cookie", "foo=bar");
+        } else if (g_str_equal (path, "/long-invalid-body-length")) {
+                void *body = g_malloc (sizeof (char) * G_MAXINT32 + 1);
+
+                memset (body, 'A', sizeof (char) * G_MAXINT32 + 1);
+                soup_server_message_set_response (msg, "application/octet-stream",
+                                                  SOUP_MEMORY_TAKE, g_steal_pointer (&body),
+                                                  sizeof (char) * G_MAXINT32 + 1);
+#ifdef __clang_analyzer__
+                // Supress false positive about body being leaked.
+                [[clang::suppress]]
+#endif
+                soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
+                return;
         }
         soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
         soup_server_message_set_response (msg, "text/plain",
@@ -499,6 +557,7 @@ main (int argc, char **argv)
         g_test_add_func ("/logger/filters", do_logger_filters_test);
         g_test_add_func ("/logger/cookies", do_logger_cookies_test);
         g_test_add_func ("/logger/preconnect", do_logger_preconnect_test);
+        g_test_add_func ("/logger/long-invalid-body-length", do_logger_long_invalid_body_length_test);
 
         ret = g_test_run ();
 

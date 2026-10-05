@@ -98,6 +98,14 @@ msg_got_headers_cb (SoupMessage        *msg,
 }
 
 static void
+msg_got_body_data_cb (SoupMessage *msg,
+                      guint        chunk_size,
+                      guint64     *response_body_bytes_received)
+{
+        *response_body_bytes_received += chunk_size;
+}
+
+static void
 msg_got_body_cb (SoupMessage        *msg,
                  SoupMessageMetrics *metrics)
 {
@@ -113,6 +121,7 @@ do_request (SoupSession *session, GUri *base_uri, char *path)
 	GBytes *body;
 	char *md5;
         SoupMessageMetrics *metrics;
+        guint64 response_body_bytes_received = 0;
 
 	uri = g_uri_parse_relative (base_uri, path, SOUP_HTTP_URI_FLAGS, NULL);
 	msg = soup_message_new_from_uri ("GET", uri);
@@ -134,6 +143,9 @@ do_request (SoupSession *session, GUri *base_uri, char *path)
         g_signal_connect (msg, "got-headers",
                           G_CALLBACK (msg_got_headers_cb),
                           metrics);
+        g_signal_connect (msg, "got-body-data",
+                          G_CALLBACK (msg_got_body_data_cb),
+                          &response_body_bytes_received);
         g_signal_connect (msg, "got-body",
                           G_CALLBACK (msg_got_body_cb),
                           metrics);
@@ -143,6 +155,7 @@ do_request (SoupSession *session, GUri *base_uri, char *path)
 	soup_test_assert_message_status (msg, SOUP_STATUS_OK);
 	g_assert_cmpint (g_bytes_get_size (body), ==, g_bytes_get_size (full_response));
         g_assert_cmpint (soup_message_metrics_get_response_body_size (metrics), ==, g_bytes_get_size (body));
+        g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), ==, response_body_bytes_received);
         g_assert_cmpuint (soup_message_metrics_get_request_header_bytes_sent (metrics), >, 0);
         g_assert_cmpuint (soup_message_metrics_get_request_body_bytes_sent (metrics), ==, 0);
         g_assert_cmpuint (soup_message_metrics_get_request_body_size (metrics), ==, 0);
@@ -151,6 +164,12 @@ do_request (SoupSession *session, GUri *base_uri, char *path)
                 g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), >, soup_message_metrics_get_response_body_size (metrics));
         } else {
                 g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), ==, soup_message_metrics_get_response_body_size (metrics));
+        }
+        if (g_str_equal (path, "content-length")) {
+                goffset content_length;
+
+                content_length = soup_message_headers_get_content_length (soup_message_get_response_headers (msg));
+                g_assert_cmpuint (content_length, ==, response_body_bytes_received);
         }
 
 	md5 = g_compute_checksum_for_data (G_CHECKSUM_MD5,
@@ -198,6 +217,74 @@ do_eof_test (gconstpointer data)
 	soup_test_session_abort_unref (session);
 }
 
+static void
+do_skip (SoupSession *session,
+         GUri        *base_uri,
+         const char  *path)
+{
+        GUri *uri;
+        SoupMessage *msg;
+        GInputStream *stream;
+        SoupMessageMetrics *metrics;
+        guint64 body_size = 0;
+        guint64 response_body_bytes_received = 0;
+        GError *error = NULL;
+
+        uri = g_uri_parse_relative (base_uri, path, SOUP_HTTP_URI_FLAGS, NULL);
+        msg = soup_message_new_from_uri ("GET", uri);
+        g_uri_unref (uri);
+
+        soup_message_add_flags (msg, SOUP_MESSAGE_COLLECT_METRICS);
+        g_signal_connect (msg, "got-body-data",
+                          G_CALLBACK (msg_got_body_data_cb),
+                          &response_body_bytes_received);
+
+        stream = soup_test_request_send (session, msg, NULL, 0, &error);
+        g_assert_no_error (error);
+        while (TRUE) {
+                gssize skipped;
+
+                skipped = g_input_stream_skip (stream, 4096, NULL, &error);
+                g_assert_no_error (error);
+                if (skipped == 0)
+                        break;
+
+                body_size += skipped;
+        }
+        g_object_unref (stream);
+
+        metrics = soup_message_get_metrics (msg);
+        g_assert_cmpint (body_size, ==, g_bytes_get_size (full_response));
+        g_assert_cmpint (soup_message_metrics_get_response_body_size (metrics), ==, body_size);
+        g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), ==, response_body_bytes_received);
+        if (g_str_equal (path, "chunked")) {
+                g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), >, soup_message_metrics_get_response_body_size (metrics));
+        } else {
+                g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), ==, soup_message_metrics_get_response_body_size (metrics));
+        }
+        if (g_str_equal (path, "content-length")) {
+                goffset content_length;
+
+                content_length = soup_message_headers_get_content_length (soup_message_get_response_headers (msg));
+                g_assert_cmpuint (content_length, ==, response_body_bytes_received);
+        }
+
+        g_object_unref (msg);
+}
+
+static void
+do_skip_test (gconstpointer data)
+{
+        GUri *base_uri = (GUri *)data;
+        SoupSession *session;
+
+        session = soup_test_session_new (NULL);
+        do_skip (session, base_uri, "chunked");
+        do_skip (session, base_uri, "content-length");
+        do_skip (session, base_uri, "eof");
+        soup_test_session_abort_unref (session);
+}
+
 int
 main (int argc, char **argv)
 {
@@ -222,6 +309,7 @@ main (int argc, char **argv)
 	g_test_add_data_func ("/streaming/chunked", base_uri, do_chunked_test);
 	g_test_add_data_func ("/streaming/content-length", base_uri, do_content_length_test);
 	g_test_add_data_func ("/streaming/eof", base_uri, do_eof_test);
+        g_test_add_data_func ("/streaming/skip", base_uri, do_skip_test);
 
 	ret = g_test_run ();
 

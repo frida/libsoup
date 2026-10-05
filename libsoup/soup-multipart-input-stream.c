@@ -9,6 +9,7 @@
 #include <config.h>
 #endif
 
+#include <glib/gi18n-lib.h>
 #include <string.h>
 
 #include "soup-body-input-stream.h"
@@ -19,6 +20,7 @@
 #include "soup-multipart-input-stream.h"
 
 #define RESPONSE_BLOCK_SIZE 8192
+#define MULTIPART_HEADER_SIZE_LIMIT (100 * 1024)
 
 /**
  * SoupMultipartInputStream:
@@ -31,7 +33,7 @@
  * [method@MultipartInputStream.next_part] before reading. Responses
  * which are not wrapped will be treated like non-multipart responses.
  *
- * Note that although #SoupMultipartInputStream is a [class@Gio.InputStream],
+ * Note that although [class@MultipartInputStream] is a [class@Gio.InputStream],
  * you should not read directly from it, and the results are undefined
  * if you do.
  **/
@@ -93,8 +95,8 @@ soup_multipart_input_stream_finalize (GObject *object)
 
 	g_free (priv->boundary);
 
-	if (priv->meta_buf)
-		g_clear_pointer (&priv->meta_buf, g_byte_array_unref);
+	g_clear_pointer (&priv->meta_buf, g_byte_array_unref);
+	g_clear_pointer (&priv->current_headers, soup_message_headers_unref);
 
 	G_OBJECT_CLASS (soup_multipart_input_stream_parent_class)->finalize (object);
 }
@@ -362,7 +364,6 @@ soup_multipart_input_stream_read_headers (SoupMultipartInputStream  *multipart,
 {
 	SoupMultipartInputStreamPrivate *priv = soup_multipart_input_stream_get_instance_private (multipart);
 	guchar read_buf[RESPONSE_BLOCK_SIZE];
-	guchar *buf;
 	gboolean got_boundary = FALSE;
 	gboolean got_lf = FALSE;
 	gssize nread = 0;
@@ -376,7 +377,7 @@ soup_multipart_input_stream_read_headers (SoupMultipartInputStream  *multipart,
 							    /* blocking */ TRUE, &got_lf, cancellable, error);
 
 		if (nread <= 0)
-			break;
+			return FALSE;
 
 		g_byte_array_append (priv->meta_buf, read_buf, nread);
 
@@ -384,27 +385,36 @@ soup_multipart_input_stream_read_headers (SoupMultipartInputStream  *multipart,
 		 * may get the multipart end indicator without getting a new line.
 		 */
 		if (!got_boundary &&
+		    priv->meta_buf->len >= priv->boundary_size &&
 		    !strncmp ((char *)priv->meta_buf->data,
 			      priv->boundary,
 			      priv->boundary_size)) {
 			got_boundary = TRUE;
 
 			/* Now check for possible multipart termination. */
-			buf = &read_buf[nread - 4];
-			if ((nread >= 4 && !memcmp (buf, "--\r\n", 4)) ||
-			    (nread >= 3 && !memcmp (buf + 1, "--\n", 3)) ||
-			    (nread >= 3 && !memcmp (buf + 2, "--", 2))) {
+			if ((nread >= 4 && !memcmp (read_buf + nread - 4, "--\r\n", 4)) ||
+			    (nread >= 3 && !memcmp (read_buf + nread - 3, "--\n", 3)) ||
+			    (nread >= 3 && !memcmp (read_buf + nread - 2, "--", 2))) {
 				g_byte_array_set_size (priv->meta_buf, 0);
 				return FALSE;
 			}
 		}
 
-		g_return_val_if_fail (got_lf, FALSE);
+		if (!got_lf)
+			return FALSE;
 
 		/* Discard pre-boundary lines. */
 		if (!got_boundary) {
 			g_byte_array_set_size (priv->meta_buf, 0);
 			continue;
+		}
+
+		if (priv->meta_buf->len > MULTIPART_HEADER_SIZE_LIMIT) {
+			g_set_error_literal (error, G_IO_ERROR,
+					     G_IO_ERROR_PARTIAL_INPUT,
+					     _("Header too big"));
+			g_byte_array_set_size (priv->meta_buf, 0);
+			return FALSE;
 		}
 
 		if (nread == 1 &&
@@ -431,7 +441,7 @@ soup_multipart_input_stream_read_headers (SoupMultipartInputStream  *multipart,
  * @msg: the #SoupMessage the response is related to.
  * @base_stream: the #GInputStream returned by sending the request.
  *
- * Creates a new #SoupMultipartInputStream that wraps the
+ * Creates a new [class@MultipartInputStream] that wraps the
  * [class@Gio.InputStream] obtained by sending the [class@Message].
  *
  * Reads should not be done directly through this object, use the input streams
@@ -459,7 +469,7 @@ soup_multipart_input_stream_new (SoupMessage  *msg,
  * Obtains an input stream for the next part.
  *
  * When dealing with a multipart response the input stream needs to be wrapped
- * in a #SoupMultipartInputStream and this function or its async counterpart
+ * in a [class@MultipartInputStream] and this function or its async counterpart
  * need to be called to obtain the first part for reading.
  *
  * After calling this function,
@@ -467,6 +477,9 @@ soup_multipart_input_stream_new (SoupMessage  *msg,
  * headers for the first part. A read of 0 bytes indicates the end of
  * the part; a new call to this function should be done at that point,
  * to obtain the next part.
+ *
+ * @error will only be set if an error happens during a read, %NULL
+ * is a valid return value otherwise.
  *
  * Returns: (nullable) (transfer full): a new #GInputStream, or
  *   %NULL if there are no more parts
@@ -539,6 +552,7 @@ soup_multipart_input_stream_next_part_async (SoupMultipartInputStream *multipart
 	g_return_if_fail (SOUP_IS_MULTIPART_INPUT_STREAM (multipart));
 
 	task = g_task_new (multipart, cancellable, callback, data);
+	g_task_set_source_tag (task, soup_multipart_input_stream_next_part_async);
 	g_task_set_priority (task, io_priority);
 
 	if (!g_input_stream_set_pending (stream, &error)) {
@@ -580,7 +594,7 @@ soup_multipart_input_stream_next_part_finish (SoupMultipartInputStream	*multipar
  * Obtains the headers for the part currently being processed.
  *
  * Note that the [struct@MessageHeaders] that are returned are owned by the
- * #SoupMultipartInputStream and will be replaced when a call is made to
+ * [class@MultipartInputStream] and will be replaced when a call is made to
  * [method@MultipartInputStream.next_part] or its async counterpart, so if
  * keeping the headers is required, a copy must be made.
  *

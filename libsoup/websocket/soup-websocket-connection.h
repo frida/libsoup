@@ -88,6 +88,13 @@ SOUP_AVAILABLE_IN_ALL
 void                soup_websocket_connection_set_max_incoming_payload_size (SoupWebsocketConnection *self,
                                                                              guint64                  max_incoming_payload_size);
 
+SOUP_AVAILABLE_IN_3_8
+guint64             soup_websocket_connection_get_max_total_message_size    (SoupWebsocketConnection *self);
+
+SOUP_AVAILABLE_IN_3_8
+void                soup_websocket_connection_set_max_total_message_size    (SoupWebsocketConnection *self,
+                                                                             guint64                  max_total_message_size);
+
 SOUP_AVAILABLE_IN_ALL
 guint               soup_websocket_connection_get_keepalive_interval (SoupWebsocketConnection *self);
 
@@ -95,11 +102,11 @@ SOUP_AVAILABLE_IN_ALL
 void                soup_websocket_connection_set_keepalive_interval (SoupWebsocketConnection *self,
                                                                       guint                    interval);
 
-SOUP_AVAILABLE_IN_ALL
-void                soup_websocket_connection_pause_input (SoupWebsocketConnection *self);
+SOUP_AVAILABLE_IN_3_6
+guint               soup_websocket_connection_get_keepalive_pong_timeout (SoupWebsocketConnection *self);
 
-
-SOUP_AVAILABLE_IN_ALL
-void                soup_websocket_connection_resume_input (SoupWebsocketConnection *self);
+SOUP_AVAILABLE_IN_3_6
+void                soup_websocket_connection_set_keepalive_pong_timeout (SoupWebsocketConnection *self,
+                                                                          guint                    pong_timeout);
 
 G_END_DECLS

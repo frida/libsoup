@@ -95,6 +95,7 @@ server_callback (SoupServer        *server,
 	if (status == SOUP_STATUS_OK) {
 		GChecksum *sum;
 		const char *body;
+		const char *authorization;
 
 		sum = g_checksum_new (G_CHECKSUM_SHA256);
 		g_checksum_update (sum, (guchar *)path, strlen (path));
@@ -102,6 +103,9 @@ server_callback (SoupServer        *server,
 			g_checksum_update (sum, (guchar *)last_modified, strlen (last_modified));
 		if (etag)
 			g_checksum_update (sum, (guchar *)etag, strlen (etag));
+		authorization = soup_message_headers_get_one (request_headers, "Authorization");
+		if (authorization)
+			g_checksum_update (sum, (guchar *)authorization, strlen (authorization));
 		body = g_checksum_get_string (sum);
 		soup_server_message_set_response (msg, "text/plain",
 						  SOUP_MEMORY_COPY,
@@ -536,7 +540,7 @@ static gboolean
 unref_stream (gpointer stream)
 {
 	g_object_unref (stream);
-	return FALSE;
+	return G_SOURCE_REMOVE;
 }
 
 static void
@@ -597,9 +601,6 @@ do_refcounting_test (gconstpointer data)
 
 	g_object_unref (cache);
 	g_free (cache_dir);
-
-	while (g_main_context_pending (NULL))
-                g_main_context_iteration (NULL, FALSE);
 	soup_test_session_abort_unref (session);
 }
 
@@ -736,6 +737,56 @@ do_leaks_test (gconstpointer data)
 	g_assert_cmpuint (count_cached_resources_in_dir (cache_dir), ==, 3);
 
 	g_object_unref (cache);
+	g_free (cache_dir);
+}
+
+static void
+do_shared_cache_authorization_test (gconstpointer data)
+{
+	GUri *base_uri = (GUri *)data;
+	SoupSession *attacker_session;
+	SoupSession *victim_session;
+	SoupCache *attacker_cache;
+	SoupCache *victim_cache;
+	char *cache_dir;
+	char *attacker_body;
+	char *victim_body;
+
+	cache_dir = g_dir_make_tmp ("cache-test-XXXXXX", NULL);
+	debug_printf (2, "  Caching to %s\n", cache_dir);
+
+	attacker_cache = soup_cache_new (cache_dir, SOUP_CACHE_SHARED);
+	attacker_session = soup_test_session_new (NULL);
+	soup_session_add_feature (attacker_session, SOUP_SESSION_FEATURE (attacker_cache));
+
+	attacker_body = do_request (attacker_session, base_uri, "GET", "/authz-shared-cache", NULL,
+				    "Authorization", "Bearer ATTACKER_SECRET",
+				    "Test-Set-Cache-Control", "max-age=600",
+				    NULL);
+	g_assert_true (last_request_hit_network);
+
+	soup_cache_dump (attacker_cache);
+	soup_test_session_abort_unref (attacker_session);
+	g_object_unref (attacker_cache);
+
+	victim_cache = soup_cache_new (cache_dir, SOUP_CACHE_SHARED);
+	soup_cache_load (victim_cache);
+	victim_session = soup_test_session_new (NULL);
+	soup_session_add_feature (victim_session, SOUP_SESSION_FEATURE (victim_cache));
+
+	victim_body = do_request (victim_session, base_uri, "GET", "/authz-shared-cache", NULL,
+				  "Authorization", "Bearer VICTIM_SECRET",
+				  "Test-Set-Cache-Control", "max-age=600",
+				  NULL);
+
+	g_assert_true (last_request_hit_network);
+	g_assert_cmpstr (attacker_body, !=, victim_body);
+
+	g_free (attacker_body);
+	g_free (victim_body);
+
+	soup_test_session_abort_unref (victim_session);
+	g_object_unref (victim_cache);
 	g_free (cache_dir);
 }
 
@@ -942,10 +993,6 @@ task_async_function (GTask        *task,
 
         g_object_unref (msg);
 
-        /* Continue iterating to ensure the item is unqueued and the connection released */
-        while (g_main_context_pending (context))
-                g_main_context_iteration (context, TRUE);
-
         /* Cache writes are G_PRIORITY_LOW, so they won't have happened yet */
         soup_cache_flush ((SoupCache *)soup_session_get_feature (request->session, SOUP_TYPE_CACHE));
 
@@ -1006,6 +1053,7 @@ do_threads_test (gconstpointer data)
                 requests[i].error = NULL;
 
                 task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_source_tag (task, do_threads_test);
                 g_task_set_task_data (task, &requests[i], NULL);
                 g_task_run_in_thread (task, (GTaskThreadFunc)task_async_function);
                 g_object_unref (task);
@@ -1030,6 +1078,7 @@ do_threads_test (gconstpointer data)
                 requests[i].error = NULL;
 
                 task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_source_tag (task, do_threads_test);
                 g_task_set_task_data (task, &requests[i], NULL);
                 g_task_run_in_thread (task, (GTaskThreadFunc)task_async_function);
                 g_object_unref (task);
@@ -1063,6 +1112,7 @@ do_threads_test (gconstpointer data)
                 requests[i].error = NULL;
 
                 task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_source_tag (task, do_threads_test);
                 g_task_set_task_data (task, &requests[i], NULL);
                 g_task_run_in_thread (task, (GTaskThreadFunc)task_async_function);
                 g_object_unref (task);
@@ -1112,6 +1162,7 @@ main (int argc, char **argv)
 	g_test_add_data_func ("/cache/cancellation", base_uri, do_cancel_test);
 	g_test_add_data_func ("/cache/refcounting", base_uri, do_refcounting_test);
 	g_test_add_data_func ("/cache/headers", base_uri, do_headers_test);
+	g_test_add_data_func ("/cache/shared-cache-authorization", base_uri, do_shared_cache_authorization_test);
 	g_test_add_data_func ("/cache/leaks", base_uri, do_leaks_test);
         g_test_add_data_func ("/cache/metrics", base_uri, do_metrics_test);
         g_test_add_data_func ("/cache/threads", base_uri, do_threads_test);

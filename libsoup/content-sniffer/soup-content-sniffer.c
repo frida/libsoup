@@ -28,10 +28,10 @@
  *
  * Sniffs the mime type of messages.
  *
- * A #SoupContentSniffer tries to detect the actual content type of
+ * A [class@ContentSniffer] tries to detect the actual content type of
  * the files that are being downloaded by looking at some of the data
  * before the [class@Message] emits its [signal@Message::got-headers] signal.
- * #SoupContentSniffer implements [iface@SessionFeature], so you can add
+ * [class@ContentSniffer] implements [iface@SessionFeature], so you can add
  * content sniffing to a session with [method@Session.add_feature] or
  * [method@Session.add_feature_by_type].
  **/
@@ -229,13 +229,27 @@ static SoupContentSnifferMediaPattern audio_video_types_table[] = {
 };
 
 static gboolean
+data_has_prefix (const char *data, const char *prefix, gsize max_length)
+{
+        if (strlen (prefix) > max_length)
+                return FALSE;
+
+        return memcmp (data, prefix, strlen (prefix)) == 0;
+}
+
+static gboolean
 sniff_mp4 (SoupContentSniffer *sniffer, GBytes *buffer)
 {
 	gsize resource_length;
 	const char *resource = g_bytes_get_data (buffer, &resource_length);
 	resource_length = MIN (512, resource_length);
-	guint32 box_size = *((guint32*)resource);
+	guint32 box_size;
 	guint i;
+
+        if (resource_length < sizeof (guint32))
+                return FALSE;
+
+	box_size = *((guint32*)resource);
 
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	box_size = ((box_size >> 24) |
@@ -247,14 +261,14 @@ sniff_mp4 (SoupContentSniffer *sniffer, GBytes *buffer)
 	if (resource_length < 12 || resource_length < box_size || box_size % 4 != 0)
 		return FALSE;
 
-	if (!g_str_has_prefix (resource + 4, "ftyp"))
+	if (!data_has_prefix (resource + 4, "ftyp", resource_length - 4))
 		return FALSE;
 
-	if (!g_str_has_prefix (resource + 8, "mp4"))
+	if (!data_has_prefix (resource + 8, "mp4", resource_length - 8))
 		return FALSE;
 
 	for (i = 16; i < box_size && i < resource_length; i = i + 4) {
-		if (g_str_has_prefix (resource + i, "mp4"))
+		if (data_has_prefix (resource + i, "mp4", resource_length - i))
 			return TRUE;
 	}
 
@@ -510,12 +524,16 @@ sniff_unknown (SoupContentSniffer *sniffer, GBytes *buffer,
 		if (!sniff_scriptable && type_row->scriptable)
 			continue;
 
+		/* Ensure we have data to sniff - prevents underflow in resource_length - 1 */
+		if (resource_length == 0)
+			continue;
+
 		if (type_row->has_ws) {
 			guint index_stream = 0;
 			guint index_pattern = 0;
 			gboolean skip_row = FALSE;
 
-			while ((index_stream < resource_length) &&
+			while ((index_stream < resource_length - 1) &&
 			       (index_pattern <= type_row->pattern_length)) {
 				/* Skip insignificant white space ("WS" in the spec) */
 				if (type_row->pattern[index_pattern] == ' ') {
@@ -624,15 +642,18 @@ sniff_text_or_binary (SoupContentSniffer *sniffer, GBytes *buffer)
 }
 
 static gboolean
-skip_insignificant_space (const char *resource, int *pos, int resource_length)
+skip_insignificant_space (const char *resource, gsize *pos, gsize resource_length)
 {
+        if (*pos >= resource_length)
+	        return TRUE;
+
 	while ((resource[*pos] == '\x09') ||
 	       (resource[*pos] == '\x20') ||
 	       (resource[*pos] == '\x0A') ||
 	       (resource[*pos] == '\x0D')) {
 		*pos = *pos + 1;
 
-		if (*pos > resource_length)
+		if (*pos >= resource_length)
 			return TRUE;
 	}
 
@@ -645,7 +666,7 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 	gsize resource_length;
 	const char *resource = g_bytes_get_data (buffer, &resource_length);
 	resource_length = MIN (512, resource_length);
-	int pos = 0;
+	gsize pos = 0;
 
 	if (resource_length < 3)
 		goto text_html;
@@ -655,9 +676,6 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 		pos = 3;
 
  look_for_tag:
-	if (pos > resource_length)
-		goto text_html;
-
 	if (skip_insignificant_space (resource, &pos, resource_length))
 		goto text_html;
 
@@ -670,13 +688,13 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 		goto text_html;
 
 	/* Skip comments. */
-	if (g_str_has_prefix (resource + pos, "!--")) {
+	if (data_has_prefix (resource + pos, "!--", resource_length - pos)) {
 		pos = pos + 3;
 
 		if ((pos + 2) > resource_length)
 			goto text_html;
 
-		while (!g_str_has_prefix (resource + pos, "-->")) {
+		while (!data_has_prefix (resource + pos, "-->", resource_length - pos)) {
 			pos++;
 
 			if ((pos + 2) > resource_length)
@@ -695,7 +713,7 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 		do {
 			pos++;
 
-			if (pos > resource_length)
+			if ((pos + 1) > resource_length)
 				goto text_html;
 		} while (resource[pos] != '>');
 
@@ -708,7 +726,7 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 
 			if ((pos + 1) > resource_length)
 				goto text_html;
-		} while (!g_str_has_prefix (resource + pos, "?>"));
+		} while (!data_has_prefix (resource + pos, "?>", resource_length - pos));
 
 		pos = pos + 2;
 
@@ -718,19 +736,19 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 	if ((pos + 3) > resource_length)
 		goto text_html;
 
-	if (g_str_has_prefix (resource + pos, "rss"))
+	if (data_has_prefix (resource + pos, "rss", resource_length - pos))
 		return g_strdup ("application/rss+xml");
 
 	if ((pos + 4) > resource_length)
 		goto text_html;
 
-	if (g_str_has_prefix (resource + pos, "feed"))
+	if (data_has_prefix (resource + pos, "feed", resource_length - pos))
 		return g_strdup ("application/atom+xml");
 
 	if ((pos + 7) > resource_length)
 		goto text_html;
 
-	if (g_str_has_prefix (resource + pos, "rdf:RDF")) {
+	if (data_has_prefix (resource + pos, "rdf:RDF", resource_length - pos)) {
 		pos = pos + 7;
 
 		if (skip_insignificant_space (resource, &pos, resource_length))
@@ -739,7 +757,7 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 		if ((pos + 32) > resource_length)
 			goto text_html;
 
-		if (g_str_has_prefix (resource + pos, "xmlns=\"http://purl.org/rss/1.0/\"")) {
+		if (data_has_prefix (resource + pos, "xmlns=\"http://purl.org/rss/1.0/\"", resource_length - pos)) {
 			pos = pos + 32;
 
 			if (skip_insignificant_space (resource, &pos, resource_length))
@@ -748,14 +766,14 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 			if ((pos + 55) > resource_length)
 				goto text_html;
 
-			if (g_str_has_prefix (resource + pos, "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\""))
+			if (data_has_prefix (resource + pos, "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"", resource_length - pos))
 				return g_strdup ("application/rss+xml");
 		}
 
 		if ((pos + 55) > resource_length)
 			goto text_html;
 
-		if (g_str_has_prefix (resource + pos, "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"")) {
+		if (data_has_prefix (resource + pos, "xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"", resource_length - pos)) {
 			pos = pos + 55;
 
 			if (skip_insignificant_space (resource, &pos, resource_length))
@@ -764,7 +782,7 @@ sniff_feed_or_html (SoupContentSniffer *sniffer, GBytes *buffer)
 			if ((pos + 32) > resource_length)
 				goto text_html;
 
-			if (g_str_has_prefix (resource + pos, "xmlns=\"http://purl.org/rss/1.0/\""))
+			if (data_has_prefix (resource + pos, "xmlns=\"http://purl.org/rss/1.0/\"", resource_length - pos))
 				return g_strdup ("application/rss+xml");
 		}
 	}
@@ -892,7 +910,7 @@ soup_content_sniffer_session_feature_init (SoupSessionFeatureInterface *feature_
 /**
  * soup_content_sniffer_new:
  *
- * Creates a new #SoupContentSniffer.
+ * Creates a new [class@ContentSniffer].
  *
  * Returns: a new #SoupContentSniffer
  **/

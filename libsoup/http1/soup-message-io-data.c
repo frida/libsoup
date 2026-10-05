@@ -17,15 +17,14 @@
 #include "soup.h"
 
 #define RESPONSE_BLOCK_SIZE 8192
-#define HEADER_SIZE_LIMIT (64 * 1024)
+#define HEADER_SIZE_LIMIT (100 * 1024)
 
 void
 soup_message_io_data_cleanup (SoupMessageIOData *io)
 {
 	if (io->io_source) {
 		g_source_destroy (io->io_source);
-		g_source_unref (io->io_source);
-		io->io_source = NULL;
+		g_clear_pointer (&io->io_source, g_source_unref);
 	}
 
 	if (io->body_istream)
@@ -177,6 +176,7 @@ soup_message_io_data_get_source (SoupMessageIOData      *io,
 		base_source = g_timeout_source_new (0);
 
         source = soup_message_io_source_new (base_source, msg, io && io->paused, message_io_source_check);
+	g_source_set_static_name (source, "SoupMessageIOData");
 	g_source_set_callback (source, (GSourceFunc) callback, user_data, NULL);
 	return source;
 }
@@ -186,8 +186,7 @@ soup_message_io_data_pause (SoupMessageIOData *io)
 {
 	if (io->io_source) {
 		g_source_destroy (io->io_source);
-		g_source_unref (io->io_source);
-		io->io_source = NULL;
+		g_clear_pointer (&io->io_source, g_source_unref);
 	}
 
 	io->paused = TRUE;

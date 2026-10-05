@@ -67,7 +67,7 @@ static void soup_cache_session_feature_init (SoupSessionFeatureInterface *featur
 static SoupContentProcessorInterface *soup_cache_default_content_processor_interface;
 static void soup_cache_content_processor_init (SoupContentProcessorInterface *interface, gpointer interface_data);
 
-#define DEFAULT_MAX_SIZE 50 * 1024 * 1024
+#define DEFAULT_MAX_SIZE (50 * 1024 * 1024)
 #define MAX_ENTRY_DATA_PERCENTAGE 10 /* Percentage of the total size
 	                                of the cache that can be
 	                                filled by a single entry */
@@ -174,6 +174,7 @@ get_cacheability (SoupCache *cache, SoupMessage *msg)
 	SoupCacheability cacheability;
 	const char *cache_control, *content_type;
 	gboolean has_max_age = FALSE;
+	gboolean permits_authorized_shared_caching = FALSE;
 
 	/* 1. The request method must be cacheable */
 	if (soup_message_get_method (msg) == SOUP_METHOD_GET)
@@ -201,6 +202,11 @@ get_cacheability (SoupCache *cache, SoupMessage *msg)
 				soup_header_free_param_list (hash);
 				return SOUP_CACHE_UNCACHEABLE;
 			}
+
+			permits_authorized_shared_caching =
+				g_hash_table_lookup_extended (hash, "public", NULL, NULL) ||
+				g_hash_table_lookup_extended (hash, "must-revalidate", NULL, NULL) ||
+				g_hash_table_lookup_extended (hash, "s-maxage", NULL, NULL);
 		}
 
 		/* 2. The 'no-store' cache directive does not appear in the
@@ -224,6 +230,15 @@ get_cacheability (SoupCache *cache, SoupMessage *msg)
 
 		soup_header_free_param_list (hash);
 	}
+
+	/* RFC 7234 Section 3.2: a shared cache MUST NOT store a response to
+	 * a request containing an Authorization header unless the response
+	 * explicitly allows it with public, must-revalidate or s-maxage.
+	 */
+	if (priv->cache_type == SOUP_CACHE_SHARED &&
+	    !permits_authorized_shared_caching &&
+	    soup_message_headers_get_one_common (soup_message_get_request_headers (msg), SOUP_HEADER_AUTHORIZATION))
+		return SOUP_CACHE_UNCACHEABLE;
 
 	/* Section 13.9 */
 	if ((g_uri_get_query (soup_message_get_uri (msg))) &&
@@ -419,9 +434,9 @@ soup_cache_entry_set_freshness (SoupCacheEntry *entry, SoupMessage *msg, SoupCac
 		gint64 expires_t, date_t;
 
 		expires_d = soup_date_time_new_from_http_string (expires);
-		if (expires_d) {
-			date_d = soup_date_time_new_from_http_string (date);
+		date_d = soup_date_time_new_from_http_string (date);
 
+		if (expires_d && date_d) {
 			expires_t = g_date_time_to_unix (expires_d);
 			date_t = g_date_time_to_unix (date_d);
 
@@ -463,13 +478,15 @@ soup_cache_entry_set_freshness (SoupCacheEntry *entry, SoupMessage *msg, SoupCac
 		gint64 now, last_modified_t;
 
 		soup_date = soup_date_time_new_from_http_string (last_modified);
-		last_modified_t = g_date_time_to_unix (soup_date);
-		now = time (NULL);
+		if (soup_date) {
+			last_modified_t = g_date_time_to_unix (soup_date);
+			now = time (NULL);
 
 #define HEURISTIC_FACTOR 0.1 /* From Section 2.3.1.1 */
 
-		entry->freshness_lifetime = MAX (0, (now - last_modified_t) * HEURISTIC_FACTOR);
-		g_date_time_unref (soup_date);
+			entry->freshness_lifetime = MAX (0, (now - last_modified_t) * HEURISTIC_FACTOR);
+			g_date_time_unref (soup_date);
+		}
 	}
 
 	return;
@@ -484,6 +501,7 @@ soup_cache_entry_new (SoupCache *cache, SoupMessage *msg, time_t request_time, t
 {
 	SoupCacheEntry *entry;
 	const char *date;
+	GDateTime *soup_date = NULL;
 
 	entry = g_slice_new0 (SoupCacheEntry);
 	entry->dirty = FALSE;
@@ -504,13 +522,13 @@ soup_cache_entry_new (SoupCache *cache, SoupMessage *msg, time_t request_time, t
 
 	/* Section 2.3.2, Calculating Age */
 	date = soup_message_headers_get_one_common (entry->headers, SOUP_HEADER_DATE);
+	if (date)
+		soup_date = soup_date_time_new_from_http_string (date);
 
-	if (date) {
-		GDateTime *soup_date;
+	if (soup_date) {
 		const char *age;
 		gint64 date_value, apparent_age, corrected_received_age, response_delay, age_value = 0;
 
-		soup_date = soup_date_time_new_from_http_string (date);
 		date_value = g_date_time_to_unix (soup_date);
 		g_date_time_unref (soup_date);
 
@@ -1295,7 +1313,7 @@ soup_cache_has_response (SoupCache *cache, SoupMessage *msg)
  *
  * Calculates whether the @msg can be cached or not.
  *
- * Returns: a #SoupCacheability value indicating whether the @msg can be cached
+ * Returns: a [flags@Cacheability] value indicating whether the @msg can be cached
  *   or not.
  */
 SoupCacheability
@@ -1406,7 +1424,7 @@ clear_cache_files (SoupCache *cache)
  *
  * Will remove all entries in the @cache plus all the cache files.
  *
- * This is not thread safe and must be called only from the thread that created the #SoupCache
+ * This is not thread safe and must be called only from the thread that created the [class@Cache]
  */
 void
 soup_cache_clear (SoupCache *cache)
@@ -1471,11 +1489,11 @@ soup_cache_generate_conditional_request (SoupCache *cache, SoupMessage *original
 	if (last_modified)
 		soup_message_headers_append_common (soup_message_get_request_headers (msg),
                                                     SOUP_HEADER_IF_MODIFIED_SINCE,
-                                                    last_modified);
+                                                    last_modified, SOUP_HEADER_VALUE_TRUSTED);
 	if (etag)
 		soup_message_headers_append_common (soup_message_get_request_headers (msg),
                                                     SOUP_HEADER_IF_NONE_MATCH,
-                                                    etag);
+                                                    etag, SOUP_HEADER_VALUE_TRUSTED);
 
 	return msg;
 }
@@ -1568,7 +1586,7 @@ pack_entry (gpointer data,
  * You must call this before exiting if you want your cache data to
  * persist between sessions.
  *
- * This is not thread safe and must be called only from the thread that created the #SoupCache
+ * This is not thread safe and must be called only from the thread that created the [class@Cache]
  */
 void
 soup_cache_dump (SoupCache *cache)
@@ -1631,7 +1649,7 @@ insert_cache_file (SoupCache *cache, const char *name, GHashTable *leaked_entrie
  *
  * Loads the contents of @cache's index into memory.
  *
- * This is not thread safe and must be called only from the thread that created the #SoupCache
+ * This is not thread safe and must be called only from the thread that created the [class@Cache]
  */
 void
 soup_cache_load (SoupCache *cache)

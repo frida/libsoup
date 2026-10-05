@@ -3,12 +3,13 @@ namespace = "Soup"
 version = "@VERSION@"
 browse_url = "https://gitlab.gnome.org/GNOME/libsoup"
 repository_url = "https://gitlab.gnome.org/GNOME/libsoup.git"
-docs_url = "https://libsoup.org/libsoup-3.0/"
-website_url = "https://libsoup.org/"
+docs_url = "https://libsoup.gnome.org/libsoup-3.0/"
+website_url = "https://libsoup.gnome.org/"
+logo_url = "https://gitlab.gnome.org/uploads/-/system/project/avatar/1630/logo.png"
 authors = "Dan Winship, Claudio Saavedra, Patrick Griffis, and Carlos Garcia Campos"
 license = "LGPL-2.0-or-later"
 description = "HTTP client/server library for GNOME"
-dependencies = [ "GObject-2.0", "GLib-1.0", "Gio-2.0" ]
+dependencies = [ "GObject-2.0", "GLib-2.0", "Gio-2.0" ]
 devhelp = true
 search_index = true
 
@@ -23,7 +24,7 @@ description = "The base type system library"
 docs_url = "https://docs.gtk.org/glib/"
 
 [dependencies."Gio-2.0"]
-name = "GIO"
+name = "Gio"
 description = "GObject Interfaces and Objects, Networking, IPC, and I/O"
 docs_url = "https://docs.gtk.org/gio/"
 
@@ -48,5 +49,10 @@ content_files = [
 ]
 
 content_images = [
+  "images/favicon.ico",
+  "images/favicon-16x16.png",
+  "images/favicon-32x32.png",
+  "images/favicon-180x180.png",
+  "images/favicon-192x192.png",
 ]
 urlmap_file = "urlmap.js"

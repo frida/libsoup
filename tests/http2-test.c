@@ -34,6 +34,9 @@ typedef struct {
 #define LARGE_N_CHARS 24
 #define LARGE_CHARS_REPEAT 1024
 
+// This just needs to be larger than our default window size in soup-connection.c
+#define REALLY_LARGE_BUFFER_SIZE 62914600
+
 static void
 setup_session (Test *test, gconstpointer data)
 {
@@ -149,14 +152,52 @@ read_stream_to_bytes_sync (GInputStream *stream)
 }
 
 static void
-on_send_complete (GObject *source, GAsyncResult *res, gpointer user_data)
+stream_splice_async_finished_cb (GObject *source, GAsyncResult *result, gpointer user_data)
 {
-        SoupSession *sess = SOUP_SESSION (source);
+        GError *error = NULL;
+        GBytes **bytes_out = user_data;
+
+        g_output_stream_splice_finish (G_OUTPUT_STREAM (source), result, &error);
+        g_assert_no_error (error);
+
+        *bytes_out = g_memory_output_stream_steal_as_bytes (G_MEMORY_OUTPUT_STREAM (source));
+}
+
+static void
+on_send_complete_async (GObject *source, GAsyncResult *res, gpointer user_data)
+{
+        SoupSession *session = SOUP_SESSION (source);
+        GError *error = NULL;
+        GInputStream *stream;
+        GBytes **bytes_out = user_data;
+        GOutputStream *out;
+
+        stream = soup_session_send_finish (session, res, &error);
+
+        g_assert_no_error (error);
+        g_assert_nonnull (stream);
+
+        out = g_memory_output_stream_new_resizable ();
+        g_output_stream_splice_async (out, stream,
+                                      G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET,
+                                      G_PRIORITY_DEFAULT, NULL,
+                                      stream_splice_async_finished_cb, user_data);
+        while (!*bytes_out)
+                g_main_context_iteration (g_main_context_get_thread_default (), TRUE);
+
+        g_object_unref (stream);
+        g_object_unref (out);
+}
+
+static void
+on_send_complete_sync (GObject *source, GAsyncResult *res, gpointer user_data)
+{
+        SoupSession *session = SOUP_SESSION (source);
         GError *error = NULL;
         GInputStream *stream;
         GBytes **bytes_out = user_data;
 
-        stream = soup_session_send_finish (sess, res, &error);
+        stream = soup_session_send_finish (session, res, &error);
 
         g_assert_no_error (error);
         g_assert_nonnull (stream);
@@ -166,13 +207,15 @@ on_send_complete (GObject *source, GAsyncResult *res, gpointer user_data)
 }
 
 static void
-do_multi_message_async_test (Test *test, gconstpointer data)
+do_multi_message_test (Test *test, gconstpointer data)
 {
+        gboolean async = GPOINTER_TO_INT (data);
         GMainContext *async_context = g_main_context_ref_thread_default ();
         GUri *uri1, *uri2;
         SoupMessage *msg1, *msg2;
         GBytes *response1 = NULL;
         GBytes *response2 = NULL;
+        GAsyncReadyCallback callback;
 
         uri1 = g_uri_parse_relative (base_uri, "echo_query?body%201", SOUP_HTTP_URI_FLAGS, NULL);
         msg1 = soup_message_new_from_uri (SOUP_METHOD_GET, uri1);
@@ -181,8 +224,9 @@ do_multi_message_async_test (Test *test, gconstpointer data)
         uri2 = g_uri_parse_relative (base_uri, "echo_query?body%202", SOUP_HTTP_URI_FLAGS, NULL);
         msg2 = soup_message_new_from_uri (SOUP_METHOD_GET, uri2);
         soup_message_set_http_version (msg2, SOUP_HTTP_2_0);
-        soup_session_send_async (test->session, msg1, G_PRIORITY_DEFAULT, NULL, on_send_complete, &response1);
-        soup_session_send_async (test->session, msg2, G_PRIORITY_DEFAULT, NULL, on_send_complete, &response2);
+        callback = async ? on_send_complete_async : on_send_complete_sync;
+        soup_session_send_async (test->session, msg1, G_PRIORITY_DEFAULT, NULL, callback, &response1);
+        soup_session_send_async (test->session, msg2, G_PRIORITY_DEFAULT, NULL, callback, &response2);
 
         while (!response1 || !response2) {
                 g_main_context_iteration (async_context, TRUE);
@@ -194,9 +238,6 @@ do_multi_message_async_test (Test *test, gconstpointer data)
         g_assert_cmpstr (g_bytes_get_data (response1, NULL), ==, "body%201");
         g_assert_cmpstr (g_bytes_get_data (response2, NULL), ==, "body%202");
 
-        while (g_main_context_pending (async_context))
-                g_main_context_iteration (async_context, FALSE);
-
         g_bytes_unref (response1);
         g_bytes_unref (response2);
         g_object_unref (msg1);
@@ -205,7 +246,6 @@ do_multi_message_async_test (Test *test, gconstpointer data)
         g_uri_unref (uri2);
         g_main_context_unref (async_context);
 }
-
 
 static void
 on_send_and_read_cancelled_complete (SoupSession  *session,
@@ -316,9 +356,6 @@ do_one_cancel_after_send_request_test (SoupSession *session,
                 g_bytes_unref (body);
         }
 
-        while (g_main_context_pending (NULL))
-		g_main_context_iteration (NULL, FALSE);
-
         g_object_unref (cancellable);
         g_object_unref (ostream);
         g_object_unref (istream);
@@ -366,7 +403,7 @@ do_post_large_sync_test (Test *test, gconstpointer data)
         GUri *uri;
         SoupMessage *msg;
         GInputStream *response;
-        guint large_size = 10000;
+        guint large_size = 1000000;
         char *large_data;
         unsigned int i;
         GError *error = NULL;
@@ -407,15 +444,12 @@ do_post_async_test (Test *test, gconstpointer data)
         msg = soup_message_new_from_uri (SOUP_METHOD_POST, uri);
         soup_message_set_request_body_from_bytes (msg, "text/plain", bytes);
 
-        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete, &response);
+        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete_sync, &response);
 
         while (!response)
                 g_main_context_iteration (async_context, TRUE);
 
         g_assert_cmpstr (g_bytes_get_data (response, NULL), ==, "body 1");
-
-        while (g_main_context_pending (async_context))
-                g_main_context_iteration (async_context, FALSE);
 
         g_bytes_unref (response);
         g_bytes_unref (bytes);
@@ -431,7 +465,7 @@ do_post_large_async_test (Test *test, gconstpointer data)
         SoupMessage *msg;
         GBytes *response = NULL;
         GMainContext *async_context = g_main_context_ref_thread_default ();
-        guint large_size = 10000;
+        guint large_size = 1000000;
         char *large_data;
         unsigned int i;
 
@@ -444,15 +478,12 @@ do_post_large_async_test (Test *test, gconstpointer data)
         msg = soup_message_new_from_uri (SOUP_METHOD_POST, uri);
         soup_message_set_request_body_from_bytes (msg, "text/plain", bytes);
 
-        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete, &response);
+        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete_sync, &response);
 
         while (!response)
                 g_main_context_iteration (async_context, TRUE);
 
         g_assert_true (g_bytes_equal (bytes, response));
-
-        while (g_main_context_pending (async_context))
-                g_main_context_iteration (async_context, FALSE);
 
         g_bytes_unref (response);
         g_bytes_unref (bytes);
@@ -476,7 +507,7 @@ do_post_blocked_async_test (Test *test, gconstpointer data)
         msg = soup_message_new_from_uri (SOUP_METHOD_POST, uri);
         soup_message_set_request_body (msg, "text/plain", in_stream, 8 + 8);
 
-        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete, &response);
+        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete_sync, &response);
 
         while (!response) {
                 // Let it iterate for a bit waiting on blocked data
@@ -488,9 +519,6 @@ do_post_blocked_async_test (Test *test, gconstpointer data)
         }
 
         g_assert_cmpstr (g_bytes_get_data (response, NULL), ==, "Part 1 - Part 2");
-
-        while (g_main_context_pending (async_context))
-                g_main_context_iteration (async_context, FALSE);
 
         g_bytes_unref (response);
         g_object_unref (in_stream);
@@ -515,15 +543,12 @@ do_post_file_async_test (Test *test, gconstpointer data)
         msg = soup_message_new_from_uri (SOUP_METHOD_POST, uri);
         soup_message_set_request_body (msg, "application/x-x509-ca-cert", G_INPUT_STREAM (in_stream), -1);
 
-        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete, &response);
+        soup_session_send_async (test->session, msg, G_PRIORITY_DEFAULT, NULL, on_send_complete_sync, &response);
 
         while (!response)
                 g_main_context_iteration (async_context, TRUE);
 
         g_assert_true (g_str_has_prefix (g_bytes_get_data (response, NULL), "-----BEGIN CERTIFICATE-----"));
-
-        while (g_main_context_pending (async_context))
-                g_main_context_iteration (async_context, FALSE);
 
         g_bytes_unref (response);
         g_object_unref (in_stream);
@@ -571,6 +596,252 @@ do_paused_async_test (Test *test, gconstpointer data)
         g_uri_unref (uri);
 }
 
+static void
+on_send_for_buffer_test (GObject *object, GAsyncResult *result, gpointer user_data)
+{
+        SoupSession *session = SOUP_SESSION (object);
+        GError *error = NULL;
+        GInputStream **stream_out = user_data;
+
+        *stream_out = soup_session_send_finish (session, result, &error);
+
+        g_assert_no_error (error);
+        g_assert_nonnull (*stream_out);
+}
+
+static SoupBodyInputStreamHttp2 *
+get_body_stream_from_response (GInputStream *stream)
+{
+       return SOUP_BODY_INPUT_STREAM_HTTP2 (g_filter_input_stream_get_base_stream (G_FILTER_INPUT_STREAM (stream))); 
+}
+
+static void
+read_until_end_for_buffer_test (GObject *object, GAsyncResult *result, gpointer user_data)
+{
+        gboolean *finished = user_data;
+	gssize nread;
+        static char buffer[10240];
+
+	nread = g_input_stream_read_finish (G_INPUT_STREAM (object), result, NULL);
+        if (nread > 0) {
+                g_input_stream_read_async (G_INPUT_STREAM (object), buffer, sizeof (buffer), G_PRIORITY_DEFAULT, NULL, read_until_end_for_buffer_test, user_data);
+                return;
+        }
+
+        g_assert_cmpint (nread, ==, 0);
+        *finished = TRUE;
+}
+
+static void
+on_read_for_buffer_test (GObject *object, GAsyncResult *result, gpointer user_data)
+{
+	gssize *nread = user_data;
+
+	*nread = g_input_stream_read_finish (G_INPUT_STREAM (object), result, NULL);
+        g_assert_cmpint (*nread, >, 0);
+}
+
+static void
+do_flow_control_buffer_sizes (Test *test, gconstpointer data)
+{
+        GUri *uri;
+        SoupMessage *large_msg;
+        SoupMessage *small_msg;
+        GBytes *small_response;
+        GInputStream *response_stream = NULL;
+        static char buffer[1024] = { 0 };
+        gssize read_bytes = 0;
+        gsize buffer_size = 0;
+        gboolean finished = FALSE;
+
+        uri = g_uri_parse_relative (base_uri, "/larger-than-window", SOUP_HTTP_URI_FLAGS, NULL);
+        large_msg = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
+        g_uri_unref (uri);
+        soup_session_send_async (test->session, large_msg, G_PRIORITY_DEFAULT, NULL, on_send_for_buffer_test, &response_stream);
+        while (!response_stream)
+                g_main_context_iteration (g_main_context_default(), TRUE);
+
+        g_input_stream_read_async (response_stream, buffer, sizeof (buffer), G_PRIORITY_DEFAULT, NULL, on_read_for_buffer_test, &read_bytes);
+        while (read_bytes == 0)
+                g_main_context_iteration (g_main_context_default(), TRUE);
+
+
+        buffer_size = soup_body_input_stream_http2_get_buffer_size (get_body_stream_from_response (response_stream));
+        // We have not already buffered the whole response.
+        g_assert_cmpint (buffer_size, <, REALLY_LARGE_BUFFER_SIZE);
+
+        uri = g_uri_parse_relative (base_uri, "/large", SOUP_HTTP_URI_FLAGS, NULL);
+        small_msg = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
+        g_uri_unref (uri);
+        small_response = soup_session_send_and_read (test->session, small_msg, NULL, NULL);
+        g_assert_nonnull(small_response);
+        g_bytes_unref (small_response);
+        g_object_unref (small_msg);
+
+        // The buffer could grow a little but shouldn't buffer the whole thing still.
+        buffer_size = soup_body_input_stream_http2_get_buffer_size (get_body_stream_from_response (response_stream));
+        g_assert_cmpint (buffer_size, <, REALLY_LARGE_BUFFER_SIZE);
+
+        g_input_stream_read_async (response_stream, buffer, sizeof (buffer), G_PRIORITY_DEFAULT, NULL, read_until_end_for_buffer_test, &finished);
+        while (!finished)
+                g_main_context_iteration (g_main_context_default(), TRUE);
+
+        // Entire buffer was read.
+        g_assert_cmpint (0, ==, soup_body_input_stream_http2_get_buffer_size (get_body_stream_from_response (response_stream)));
+
+        g_object_unref (large_msg);
+        g_object_unref (response_stream);
+}
+
+typedef struct {
+        int connection;
+        int stream;
+} WindowSize;
+
+static void
+flow_control_message_network_event (SoupMessage        *msg,
+                                    GSocketClientEvent  event,
+                                    GIOStream          *connection,
+                                    WindowSize         *window_size)
+{
+        SoupConnection *conn;
+
+        if (event != G_SOCKET_CLIENT_RESOLVING)
+                return;
+
+        conn = soup_message_get_connection (msg);
+        g_assert_nonnull (conn);
+        if (window_size->connection != -1)
+                soup_connection_set_http2_initial_window_size (conn, window_size->connection);
+        if (window_size->stream != -1)
+                soup_connection_set_http2_initial_stream_window_size (conn, window_size->stream);
+}
+
+static void
+do_flow_control_close_buffered_body_test (Test *test, gconstpointer data)
+{
+        GUri *closed_uri;
+        GUri *followup_uri;
+        SoupMessage *closed_msg;
+        SoupMessage *followup_msg;
+        SoupConnection *connection;
+        GInputStream *response_stream = NULL;
+        GInputStream *followup_stream = NULL;
+        GBytes *response;
+        GError *error = NULL;
+        WindowSize window_size = { -1, REALLY_LARGE_BUFFER_SIZE };
+
+        soup_session_set_timeout (test->session, 2);
+
+        closed_uri = g_uri_parse_relative (base_uri, "/larger-than-window", SOUP_HTTP_URI_FLAGS, NULL);
+        closed_msg = soup_message_new_from_uri (SOUP_METHOD_GET, closed_uri);
+        g_signal_connect (closed_msg, "network-event",
+                          G_CALLBACK (flow_control_message_network_event),
+                          &window_size);
+        soup_session_send_async (test->session, closed_msg, G_PRIORITY_DEFAULT, NULL,
+                                 on_send_for_buffer_test, &response_stream);
+        while (!response_stream)
+                g_main_context_iteration (g_main_context_default (), TRUE);
+        connection = soup_message_get_connection (closed_msg);
+        g_assert_nonnull (connection);
+        g_object_ref (connection);
+
+        /* Exhaust the connection window so the next response needs the
+         * canceled stream's WINDOW_UPDATE before it can deliver any body data. */
+        while (soup_body_input_stream_http2_get_buffer_size (get_body_stream_from_response (response_stream)) < soup_connection_get_http2_initial_window_size (connection))
+                g_main_context_iteration (g_main_context_default (), TRUE);
+
+        g_assert_true (g_input_stream_close (response_stream, NULL, &error));
+        g_assert_no_error (error);
+        g_object_unref (response_stream);
+        while (!soup_connection_is_idle_open (connection))
+                g_main_context_iteration (g_main_context_default (), TRUE);
+
+        followup_uri = g_uri_parse_relative (base_uri, "/large", SOUP_HTTP_URI_FLAGS, NULL);
+        followup_msg = soup_message_new_from_uri (SOUP_METHOD_GET, followup_uri);
+        soup_session_send_async (test->session, followup_msg, G_PRIORITY_DEFAULT, NULL,
+                                 on_send_for_buffer_test, &followup_stream);
+        while (!followup_stream)
+                g_main_context_iteration (g_main_context_default (), TRUE);
+
+        g_assert_true (connection == soup_message_get_connection (followup_msg));
+        response = read_stream_to_bytes_sync (followup_stream);
+        g_assert_cmpuint (g_bytes_get_size (response), ==, (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1);
+
+        g_object_unref (followup_stream);
+        g_bytes_unref (response);
+        g_object_unref (connection);
+        g_object_unref (followup_msg);
+        g_object_unref (closed_msg);
+        g_uri_unref (followup_uri);
+        g_uri_unref (closed_uri);
+}
+
+static void
+do_flow_control_large_test (Test *test, gconstpointer data)
+{
+        gboolean async = GPOINTER_TO_INT (data);
+        GUri *uri;
+        SoupMessage *msg;
+        GBytes *response;
+        GError *error = NULL;
+        WindowSize window_size = { (LARGE_N_CHARS * LARGE_CHARS_REPEAT) / 2 , (LARGE_N_CHARS * LARGE_CHARS_REPEAT) / 2 };
+
+        uri = g_uri_parse_relative (base_uri, "/large", SOUP_HTTP_URI_FLAGS, NULL);
+        msg = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
+        g_signal_connect (msg, "network-event",
+                          G_CALLBACK (flow_control_message_network_event),
+                          &window_size);
+
+        if (async)
+                response = soup_test_session_async_send (test->session, msg, NULL, &error);
+        else
+                response = soup_session_send_and_read (test->session, msg, NULL, &error);
+
+        g_assert_no_error (error);
+        g_assert_cmpuint (g_bytes_get_size (response), ==, (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1);
+
+        g_uri_unref (uri);
+        g_bytes_unref (response);
+        g_object_unref (msg);
+}
+
+static void
+do_flow_control_multi_message_test (Test *test, gconstpointer data)
+{
+        gboolean async = GPOINTER_TO_INT (data);
+        GMainContext *async_context = g_main_context_ref_thread_default ();
+        GUri *uri;
+        SoupMessage *msg1, *msg2;
+        GBytes *response1 = NULL;
+        GBytes *response2 = NULL;
+        GAsyncReadyCallback callback;
+        WindowSize window_size = { (LARGE_N_CHARS * LARGE_CHARS_REPEAT), (LARGE_N_CHARS * LARGE_CHARS_REPEAT) / 2 };
+
+        uri = g_uri_parse_relative (base_uri, "/large", SOUP_HTTP_URI_FLAGS, NULL);
+        msg1 = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
+        g_signal_connect (msg1, "network-event",
+                          G_CALLBACK (flow_control_message_network_event),
+                          &window_size);
+        msg2 = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
+        callback = async ? on_send_complete_async : on_send_complete_sync;
+        soup_session_send_async (test->session, msg1, G_PRIORITY_DEFAULT, NULL, callback, &response1);
+        soup_session_send_async (test->session, msg2, G_PRIORITY_DEFAULT, NULL, callback, &response2);
+
+        while (!response1 || !response2)
+                g_main_context_iteration (async_context, TRUE);
+
+        g_assert_cmpuint (g_bytes_get_size (response1), ==, (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1);
+        g_assert_cmpuint (g_bytes_get_size (response2), ==, (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1);
+
+        g_uri_unref (uri);
+        g_bytes_unref (response1);
+        g_bytes_unref (response2);
+        g_object_unref (msg1);
+        g_object_unref (msg2);
+        g_main_context_unref (async_context);
+}
+
 static SoupConnection *last_connection;
 
 static void
@@ -584,9 +855,16 @@ on_send_ready (GObject *source, GAsyncResult *res, gpointer user_data)
         GInputStream *stream;
 
         stream = soup_session_send_finish (sess, res, &error);
-
         g_assert_no_error (error);
         g_assert_nonnull (stream);
+
+        g_assert_nonnull (msg);
+        g_assert_cmpuint (soup_message_get_http_version (msg), ==, SOUP_HTTP_2_0);
+        conn = soup_message_get_connection (msg);
+        if (last_connection)
+                g_assert_true (last_connection == conn);
+        else
+                last_connection = conn;
 
         GBytes *result = read_stream_to_bytes_sync (stream);
         g_object_unref (stream);
@@ -594,15 +872,6 @@ on_send_ready (GObject *source, GAsyncResult *res, gpointer user_data)
         g_assert_cmpstr (g_bytes_get_data (result, NULL), ==, "Hello world");
         g_bytes_unref (result);
 
-        g_assert_nonnull (msg);
-        g_assert_cmpuint (soup_message_get_http_version (msg), ==, SOUP_HTTP_2_0);
-        conn = soup_message_get_connection (msg);
-
-        if (last_connection)
-                g_assert (last_connection == conn);
-        else
-                last_connection = conn;
-        
         g_test_message ("Conn (%u) = %p", *complete_count, conn);
 
         *complete_count += 1;
@@ -615,10 +884,10 @@ do_connections_test (Test *test, gconstpointer data)
         guint complete_count = 0;
         GUri *uri;
 
-        if (g_getenv ("ASAN_OPTIONS")) {
-                g_test_skip ("Flakey on asan GitLab runner");
-                return;
-        }
+#ifdef __SANITIZE_ADDRESS__
+        g_test_skip ("Flakey on asan GitLab runner");
+        return;
+#endif
 
         async_context = g_main_context_ref_thread_default ();
 
@@ -635,9 +904,6 @@ do_connections_test (Test *test, gconstpointer data)
                 g_main_context_iteration (async_context, TRUE);
         }
 
-        while (g_main_context_pending (async_context))
-	        g_main_context_iteration (async_context, FALSE);
-
         /* After no messages reference the connection it should be IDLE and reusable */
         g_assert_cmpuint (soup_connection_get_state (last_connection), ==, SOUP_CONNECTION_IDLE);
         SoupMessage *msg = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
@@ -646,9 +912,6 @@ do_connections_test (Test *test, gconstpointer data)
 
         while (complete_count != N_TESTS + 1)
                 g_main_context_iteration (async_context, TRUE);
-
-        while (g_main_context_pending (async_context))
-                g_main_context_iteration (async_context, FALSE);
 
         g_uri_unref (uri);
         g_main_context_unref (async_context);
@@ -702,6 +965,7 @@ do_logging_test (Test *test, gconstpointer data)
         SoupLogger *logger = soup_logger_new (SOUP_LOGGER_LOG_BODY);
         soup_logger_set_printer (logger, log_printer, &has_logged_body, NULL);
         soup_session_add_feature (test->session, SOUP_SESSION_FEATURE (logger));
+        g_clear_object (&logger);
 
         uri = g_uri_parse_relative (base_uri, "/echo_post", SOUP_HTTP_URI_FLAGS, NULL);
         msg = soup_message_new_from_uri (SOUP_METHOD_POST, uri);
@@ -713,8 +977,17 @@ do_logging_test (Test *test, gconstpointer data)
         g_assert_true (has_logged_body);
 
         g_bytes_unref (response);
+        g_bytes_unref (bytes);
         g_object_unref (msg);
         g_uri_unref (uri);
+}
+
+static void
+msg_got_body_data_cb (SoupMessage *msg,
+                      guint        chunk_size,
+                      guint64     *response_body_bytes_received)
+{
+        *response_body_bytes_received += chunk_size;
 }
 
 static void
@@ -724,10 +997,14 @@ do_metrics_size_test (Test *test, gconstpointer data)
         SoupMessage *msg;
         GBytes *response;
         GError *error = NULL;
+        guint64 response_body_bytes_received = 0;
         GBytes *bytes = g_bytes_new_static ("Test", sizeof ("Test"));
 
         uri = g_uri_parse_relative (base_uri, "/echo_post", SOUP_HTTP_URI_FLAGS, NULL);
         msg = soup_message_new_from_uri (SOUP_METHOD_POST, uri);
+        g_signal_connect (msg, "got-body-data",
+                          G_CALLBACK (msg_got_body_data_cb),
+                          &response_body_bytes_received);
         soup_message_set_request_body_from_bytes (msg, "text/plain", bytes);
         soup_message_add_flags (msg, SOUP_MESSAGE_COLLECT_METRICS);
 
@@ -745,6 +1022,7 @@ do_metrics_size_test (Test *test, gconstpointer data)
         g_assert_cmpuint (soup_message_metrics_get_response_header_bytes_received (metrics), >, 0);
         g_assert_cmpuint (soup_message_metrics_get_response_body_size (metrics), ==, g_bytes_get_size (response));
         g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), >, soup_message_metrics_get_response_body_size (metrics));
+        g_assert_cmpuint (soup_message_metrics_get_response_body_bytes_received (metrics), ==, response_body_bytes_received);
 
         g_bytes_unref (response);
         g_bytes_unref (bytes);
@@ -1007,7 +1285,7 @@ do_invalid_header_rfc9113_received_test (Test *test, gconstpointer data)
 
         g_assert_nonnull (response);
         g_assert_no_error (error);
-        g_clear_error (&error);
+        g_bytes_unref (response);
         g_object_unref (msg);
         g_uri_unref (uri);
 }
@@ -1048,6 +1326,7 @@ static void
 do_one_sniffer_test (SoupSession  *session,
                      const char   *path,
                      gsize         expected_size,
+                     const char   *expected_type,
                      gboolean      should_sniff,
                      GMainContext *async_context)
 {
@@ -1081,7 +1360,7 @@ do_one_sniffer_test (SoupSession  *session,
         if (should_sniff) {
                 soup_test_assert (g_object_get_data (G_OBJECT (msg), "content-sniffed") != NULL,
                                   "content-sniffed did not get emitted");
-                g_assert_cmpstr (sniffed_type, ==, "text/plain");
+                g_assert_cmpstr (sniffed_type, ==, expected_type);
         } else {
                 soup_test_assert (g_object_get_data (G_OBJECT (msg), "content-sniffed") == NULL,
                                   "content-sniffed got emitted without a sniffer");
@@ -1107,12 +1386,11 @@ do_sniffer_async_test (Test *test, gconstpointer data)
         if (should_content_sniff)
                 soup_session_add_feature_by_type (test->session, SOUP_TYPE_CONTENT_SNIFFER);
 
-        do_one_sniffer_test (test->session, "/", 11, should_content_sniff, async_context);
-        do_one_sniffer_test (test->session, "/large", (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1, should_content_sniff, async_context);
-        do_one_sniffer_test (test->session, "/no-content", 0, should_content_sniff, async_context);
-
-        while (g_main_context_pending (async_context))
-                g_main_context_iteration (async_context, FALSE);
+        do_one_sniffer_test (test->session, "/", 11, "text/plain", should_content_sniff, async_context);
+        do_one_sniffer_test (test->session, "/large", (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1, "text/plain", should_content_sniff, async_context);
+        do_one_sniffer_test (test->session, "/no-content", 0, "text/plain", should_content_sniff, async_context);
+        do_one_sniffer_test (test->session, "/no-content-but-has-content-type", 0, "text/javascript", should_content_sniff, async_context);
+        do_one_sniffer_test (test->session, "/empty-but-has-content-type", 0, "text/javascript", should_content_sniff, async_context);
 
         g_main_context_unref (async_context);
 }
@@ -1125,9 +1403,12 @@ do_sniffer_sync_test (Test *test, gconstpointer data)
         if (should_content_sniff)
                 soup_session_add_feature_by_type (test->session, SOUP_TYPE_CONTENT_SNIFFER);
 
-        do_one_sniffer_test (test->session, "/", 11, should_content_sniff, NULL);
-        do_one_sniffer_test (test->session, "/large", (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1, should_content_sniff, NULL);
-        do_one_sniffer_test (test->session, "/no-content", 0, should_content_sniff, NULL);
+        do_one_sniffer_test (test->session, "/", 11, "text/plain", should_content_sniff, NULL);
+        do_one_sniffer_test (test->session, "/large", (LARGE_N_CHARS * LARGE_CHARS_REPEAT) + 1, "text/plain", should_content_sniff, NULL);
+        do_one_sniffer_test (test->session, "/no-content", 0, "text/plain", should_content_sniff, NULL);
+        do_one_sniffer_test (test->session, "/no-content-but-has-content-type", 0, "text/javascript", should_content_sniff, NULL);
+        do_one_sniffer_test (test->session, "/empty-but-has-content-type", 0, "text/javascript", should_content_sniff, NULL);
+
 }
 
 static void
@@ -1145,11 +1426,9 @@ do_timeout_test (Test *test, gconstpointer data)
         response = soup_test_session_async_send (test->session, msg, NULL, &error);
         g_assert_null (response);
         g_assert_error (error, G_IO_ERROR, G_IO_ERROR_TIMED_OUT);
+        g_clear_error (&error);
         g_object_unref (msg);
         g_uri_unref (uri);
-
-        while (g_main_context_pending (NULL))
-                g_main_context_iteration (NULL, FALSE);
 }
 
 static void
@@ -1170,10 +1449,69 @@ do_connection_closed_test (Test *test, gconstpointer data)
         g_uri_unref (uri);
 }
 
+static void
+do_broken_pseudo_header_test (Test *test, gconstpointer data)
+{
+	char *path;
+	SoupMessage *msg;
+	GUri *uri;
+	GBytes *body = NULL;
+	GError *error = NULL;
+
+	uri = g_uri_parse_relative (base_uri, "/ag", SOUP_HTTP_URI_FLAGS, NULL);
+
+	/* an ugly cheat to construct a broken URI, which can be sent from other libs */
+	path = (char *) g_uri_get_path (uri);
+	path[1] = '%';
+
+	msg = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
+	body = soup_test_session_async_send (test->session, msg, NULL, &error);
+	g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PARTIAL_INPUT);
+	g_assert_null (body);
+	g_clear_error (&error);
+	g_object_unref (msg);
+	g_uri_unref (uri);
+}
+
+static void
+disconnect_on_got_headers (SoupServerMessage *msg, gpointer user_data)
+{
+        GUri *uri;
+        SoupServerConnection *conn;
+
+        uri = soup_server_message_get_uri (msg);
+        if (!g_str_equal (g_uri_get_path (uri), "/close-on-got-headers"))
+                return;
+
+        conn = soup_server_message_get_connection (msg);
+        soup_server_connection_disconnect (conn);
+}
+
+static void
+do_server_disconnect_on_got_headers_test (Test *test, gconstpointer data)
+{
+        SoupMessage *msg;
+        GUri *uri;
+        GBytes *response;
+        GError *error = NULL;
+
+        uri = g_uri_parse_relative (base_uri, "/close-on-got-headers", SOUP_HTTP_URI_FLAGS, NULL);
+        msg = soup_message_new_from_uri (SOUP_METHOD_GET, uri);
+
+        response = soup_test_session_async_send (test->session, msg, NULL, &error);
+        g_assert_error (error, G_IO_ERROR, G_IO_ERROR_PARTIAL_INPUT);
+
+        g_clear_error (&error);
+        g_bytes_unref (response);
+        g_object_unref (msg);
+        g_uri_unref (uri);
+}
+
 static gboolean
 unpause_message (SoupServerMessage *msg)
 {
         soup_server_message_unpause (msg);
+        g_object_unref (msg);
         return FALSE;
 }
 
@@ -1200,11 +1538,19 @@ server_handler (SoupServer        *server,
                         soup_server_message_pause (msg);
                         timeout = soup_add_timeout (g_main_context_get_thread_default (),
                                                     is_timeout ? 4000 : 1000,
-                                                    (GSourceFunc)unpause_message, msg);
+                                                    (GSourceFunc)unpause_message, g_object_ref (msg));
                         g_source_unref (timeout);
                 }
         } else if (strcmp (path, "/no-content") == 0) {
                 soup_server_message_set_status (msg, SOUP_STATUS_NO_CONTENT, NULL);
+        } else if (strcmp (path, "/no-content-but-has-content-type") == 0) {
+                soup_message_headers_set_content_type (soup_server_message_get_response_headers (msg), "text/javascript", NULL);
+                soup_server_message_set_status (msg, SOUP_STATUS_NO_CONTENT, NULL);
+        } else if (strcmp (path, "/empty-but-has-content-type") == 0) {
+                soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
+                soup_server_message_set_response (msg, "text/javascript",
+                                                  SOUP_MEMORY_STATIC,
+                                                  NULL, 0);
         } else if (strcmp (path, "/large") == 0) {
                 int i, j;
                 SoupMessageBody *response_body;
@@ -1214,12 +1560,25 @@ server_handler (SoupServer        *server,
                 response_body = soup_server_message_get_response_body (msg);
                 for (i = 0; i < LARGE_N_CHARS; i++, letter++) {
                         GString *chunk = g_string_new (NULL);
+                        GBytes *bytes;
 
                         for (j = 0; j < LARGE_CHARS_REPEAT; j++)
                                 chunk = g_string_append_c (chunk, letter);
-                        soup_message_body_append_bytes (response_body, g_string_free_to_bytes (chunk));
+
+                        bytes = g_string_free_to_bytes (chunk);
+                        soup_message_body_append_bytes (response_body, bytes);
+                        g_bytes_unref (bytes);
                 }
                 soup_message_body_append (response_body, SOUP_MEMORY_STATIC, "\0", 1);
+
+                soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
+        } else if (strcmp (path, "/larger-than-window") == 0) {
+                char *big_data = g_malloc0 (REALLY_LARGE_BUFFER_SIZE);
+                GBytes *bytes = g_bytes_new_take (big_data, REALLY_LARGE_BUFFER_SIZE);
+
+                SoupMessageBody *response_body = soup_server_message_get_response_body (msg);
+                soup_message_body_append_bytes (response_body, bytes);
+                g_bytes_unref (bytes);
 
                 soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
         } else if (strcmp (path, "/echo_query") == 0) {
@@ -1261,8 +1620,8 @@ server_handler (SoupServer        *server,
                 SoupMessageHeaders *response_headers;
 
                 response_headers = soup_server_message_get_response_headers (msg);
-                /* Use soup_message_headers_append_common to skip the validation check. */
-                soup_message_headers_append_common (response_headers, SOUP_HEADER_CONTENT_TYPE, "\r");
+                /* Use soup_message_headers_append_common with trusted_value=TRUE to skip the validation check. */
+                soup_message_headers_append_common (response_headers, SOUP_HEADER_CONTENT_TYPE, "\r", TRUE);
                 soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
         } else if (strcmp (path, "/invalid-header-rfc9113") == 0) {
                 SoupMessageHeaders *response_headers;
@@ -1288,7 +1647,21 @@ server_handler (SoupServer        *server,
                 soup_server_message_set_response (msg, "text/plain",
                                                   SOUP_MEMORY_STATIC,
                                                   "Success!", 8);
+        } else if (strcmp (path, "/close-on-got-headers") == 0) {
+                soup_server_message_set_response (msg, "text/plain",
+                                                  SOUP_MEMORY_STATIC,
+                                                  "Success!", 8);
         }
+}
+
+static void
+server_request_started (SoupServer           *server,
+                        SoupServerMessage    *msg,
+                        SoupServerConnection *conn,
+                        gpointer              user_data)
+{
+        g_signal_connect (msg, "got-headers",
+                          G_CALLBACK (disconnect_on_got_headers), NULL);
 }
 
 static gboolean
@@ -1317,6 +1690,8 @@ main (int argc, char **argv)
                 return 0;
 
         server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD | SOUP_TEST_SERVER_HTTP2);
+        g_signal_connect (server, "request-started",
+                          G_CALLBACK (server_request_started), NULL);
         auth = soup_auth_domain_basic_new ("realm", "http2-test",
                                            "auth-callback", server_basic_auth_callback,
                                            NULL);
@@ -1347,9 +1722,13 @@ main (int argc, char **argv)
                     setup_session,
                     do_large_test,
                     teardown_session);
-        g_test_add ("/http2/multiplexing/async", Test, NULL,
+        g_test_add ("/http2/multiplexing/async", Test, GINT_TO_POINTER (TRUE),
                     setup_session,
-                    do_multi_message_async_test,
+                    do_multi_message_test,
+                    teardown_session);
+        g_test_add ("/http2/multiplexing/sync", Test, GINT_TO_POINTER (FALSE),
+                    setup_session,
+                    do_multi_message_test,
                     teardown_session);
         g_test_add ("/http2/post/async", Test, NULL,
                     setup_session,
@@ -1378,6 +1757,30 @@ main (int argc, char **argv)
         g_test_add ("/http2/paused/async", Test, NULL,
                     setup_session,
                     do_paused_async_test,
+                    teardown_session);
+        g_test_add ("/http2/flow-control/large/async", Test, GINT_TO_POINTER (TRUE),
+                    setup_session,
+                    do_flow_control_large_test,
+                    teardown_session);
+        g_test_add ("/http2/flow-control/large/sync", Test, GINT_TO_POINTER (FALSE),
+                    setup_session,
+                    do_flow_control_large_test,
+                    teardown_session);
+        g_test_add ("/http2/flow-control/multiplex/async", Test, GINT_TO_POINTER (TRUE),
+                    setup_session,
+                    do_flow_control_multi_message_test,
+                    teardown_session);
+        g_test_add ("/http2/flow-control/multiplex/sync", Test, GINT_TO_POINTER (FALSE),
+                    setup_session,
+                    do_flow_control_multi_message_test,
+                    teardown_session);
+        g_test_add ("/http2/flow-control/buffer-size", Test, NULL,
+                    setup_session,
+                    do_flow_control_buffer_sizes,
+                    teardown_session);
+        g_test_add ("/http2/flow-control/close-buffered-body", Test, NULL,
+                    setup_session,
+                    do_flow_control_close_buffered_body_test,
                     teardown_session);
         g_test_add ("/http2/connections", Test, NULL,
                     setup_session,
@@ -1456,6 +1859,14 @@ main (int argc, char **argv)
         g_test_add ("/http2/connection-closed", Test, NULL,
                     setup_session,
                     do_connection_closed_test,
+                    teardown_session);
+        g_test_add ("/http2/broken-pseudo-header", Test, NULL,
+                    setup_session,
+                    do_broken_pseudo_header_test,
+                    teardown_session);
+        g_test_add ("/http2/server-disconnect-on-got-headers", Test, NULL,
+                    setup_session,
+                    do_server_disconnect_on_got_headers_test,
                     teardown_session);
 
 	ret = g_test_run ();

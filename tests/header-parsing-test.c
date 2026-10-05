@@ -6,6 +6,15 @@ typedef struct {
 	const char *name, *value;
 } Header;
 
+/* These are not C strings to ensure going one byte over is not safe. */
+static char unterminated_http_version[] = {
+        'G','E','T',' ','/',' ','H','T','T','P','/','1', '0', '0', '.'
+};
+
+static char only_newlines[] = {
+        '\n', '\n', '\n', '\n'
+};
+
 static struct RequestTest {
 	const char *description;
 	const char *bugref;
@@ -15,6 +24,7 @@ static struct RequestTest {
 	const char *method, *path;
 	SoupHTTPVersion version;
 	Header headers[10];
+	GLogLevelFlags log_flags;
 } reqtests[] = {
 	/**********************/
 	/*** VALID REQUESTS ***/
@@ -24,7 +34,7 @@ static struct RequestTest {
 	  "GET / HTTP/1.0\r\n", -1,
 	  SOUP_STATUS_OK,
 	  "GET", "/", SOUP_HTTP_1_0,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "Req w/ 1 header", NULL,
@@ -33,7 +43,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 1 header, no leading whitespace", NULL,
@@ -42,7 +52,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 1 header including trailing whitespace", NULL,
@@ -51,7 +61,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 1 header, wrapped", NULL,
@@ -60,7 +70,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Foo", "bar baz" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 1 header, wrapped with additional whitespace", NULL,
@@ -69,7 +79,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Foo", "bar baz" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 1 header, wrapped with tab", NULL,
@@ -78,7 +88,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Foo", "bar baz" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 1 header, wrapped before value", NULL,
@@ -87,7 +97,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Foo", "bar baz" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 1 header with empty value", NULL,
@@ -96,7 +106,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 2 headers", NULL,
@@ -106,7 +116,7 @@ static struct RequestTest {
 	  { { "Host", "example.com" },
 	    { "Connection", "close" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 3 headers", NULL,
@@ -117,7 +127,7 @@ static struct RequestTest {
 	    { "Connection", "close" },
 	    { "Blah", "blah" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 3 headers, 1st wrapped", NULL,
@@ -128,7 +138,7 @@ static struct RequestTest {
             { "Foo", "bar baz" },
 	    { "Blah", "blah" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 3 headers, 2nd wrapped", NULL,
@@ -139,7 +149,7 @@ static struct RequestTest {
 	    { "Blah", "blah" },
 	    { "Foo", "bar baz" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ 3 headers, 3rd wrapped", NULL,
@@ -150,7 +160,7 @@ static struct RequestTest {
 	    { "Blah", "blah" },
 	    { "Foo", "bar baz" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ same header multiple times", NULL,
@@ -159,7 +169,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Foo", "bar, baz, quux" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Connection header on HTTP/1.0 message", NULL,
@@ -169,21 +179,21 @@ static struct RequestTest {
 	  { { "Connection", "Bar, Quux" },
             { "Foo", "bar" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "GET with full URI", "667637",
 	  "GET http://example.com HTTP/1.1\r\n", -1,
 	  SOUP_STATUS_OK,
 	  "GET", "http://example.com", SOUP_HTTP_1_1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "GET with full URI in upper-case", "667637",
 	  "GET HTTP://example.com HTTP/1.1\r\n", -1,
 	  SOUP_STATUS_OK,
 	  "GET", "HTTP://example.com", SOUP_HTTP_1_1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	/* It's better for this to be passed through: this means a SoupServer
@@ -193,7 +203,7 @@ static struct RequestTest {
 	  "GET AbOuT: HTTP/1.1\r\n", -1,
 	  SOUP_STATUS_OK,
 	  "GET", "AbOuT:", SOUP_HTTP_1_1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	/****************************/
@@ -208,7 +218,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	/* RFC 2616 section 3.1 says we MUST accept this */
@@ -219,7 +229,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	/* RFC 2616 section 19.3 says we SHOULD accept these */
@@ -231,7 +241,7 @@ static struct RequestTest {
 	  { { "Host", "example.com" },
 	    { "Connection", "close" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "LF instead of CRLF after Request-Line", NULL,
@@ -240,7 +250,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Mixed CRLF/LF", "666316",
@@ -252,7 +262,7 @@ static struct RequestTest {
 	    { "e", "f" },
 	    { "g", "h" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ incorrect whitespace in Request-Line", NULL,
@@ -261,7 +271,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Req w/ incorrect whitespace after Request-Line", "475169",
@@ -270,7 +280,7 @@ static struct RequestTest {
 	  "GET", "/", SOUP_HTTP_1_1,
 	  { { "Host", "example.com" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	/* If the request/status line is parseable, then we
@@ -284,7 +294,7 @@ static struct RequestTest {
 	  { { "Host", "example.com" },
 	    { "Bar", "two" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "First header line is continuation", "666316",
@@ -294,7 +304,7 @@ static struct RequestTest {
 	  { { "Host", "example.com" },
 	    { "c", "d" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Zero-length header name", "666316",
@@ -304,7 +314,7 @@ static struct RequestTest {
 	  { { "a", "b" },
 	    { "c", "d" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "CR in header name", "666316",
@@ -314,7 +324,7 @@ static struct RequestTest {
 	  { { "a", "b" },
 	    { "c", "d" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "CR in header value", "666316",
@@ -327,7 +337,7 @@ static struct RequestTest {
 	    { "s", "t" },		/* CR at end is ignored */
 	    { "c", "d" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Tab in header name", "666316",
@@ -342,7 +352,7 @@ static struct RequestTest {
 	    { "p", "q z: w" },
 	    { "c", "d" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
 	{ "Tab in header value", "666316",
@@ -355,26 +365,16 @@ static struct RequestTest {
 	    { "z", "w" },	/* trailing tab ignored */
 	    { "c", "d" },
 	    { NULL }
-	  }
+	  }, 0
 	},
 
-	{ "NUL in header name", "760832",
-	  "GET / HTTP/1.1\r\nHost\x00: example.com\r\n", 36,
-	  SOUP_STATUS_OK,
-	  "GET", "/", SOUP_HTTP_1_1,
-	  { { "Host", "example.com" },
-	    { NULL }
-	  }
-	},
-
-	{ "NUL in header value", "760832",
-	  "GET / HTTP/1.1\r\nHost: example\x00" "com\r\n", 35,
-	  SOUP_STATUS_OK,
-	  "GET", "/", SOUP_HTTP_1_1,
-	  { { "Host", "examplecom" },
-	    { NULL }
-	  }
-	},
+        { "Duplicate Content-Length with the same value", NULL,
+          "POST / HTTP/1.1\r\nContent-Length: 4\r\nContent-Length: 4\r\n",
+          -1,
+          SOUP_STATUS_OK,
+          "POST", "/", SOUP_HTTP_1_1,
+          { { "Content-Length", "4, 4" } }, 0
+        },
 
 	/************************/
 	/*** INVALID REQUESTS ***/
@@ -384,71 +384,163 @@ static struct RequestTest {
 	  "GET /\r\n", -1,
 	  SOUP_STATUS_BAD_REQUEST,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "HTTP 1.2 request (no such thing)", NULL,
 	  "GET / HTTP/1.2\r\n", -1,
 	  SOUP_STATUS_HTTP_VERSION_NOT_SUPPORTED,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "HTTP 2000 request (no such thing)", NULL,
 	  "GET / HTTP/2000.0\r\n", -1,
 	  SOUP_STATUS_HTTP_VERSION_NOT_SUPPORTED,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
+	},
+
+	{ "Long HTTP version terminating at missing minor version", "https://gitlab.gnome.org/GNOME/libsoup/-/issues/404",
+	  unterminated_http_version, sizeof (unterminated_http_version),
+	  SOUP_STATUS_BAD_REQUEST,
+           NULL, NULL, -1,
+	  { { NULL } }, 0
 	},
 
 	{ "Non-HTTP request", NULL,
 	  "GET / SOUP/1.1\r\nHost: example.com\r\n", -1,
 	  SOUP_STATUS_BAD_REQUEST,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "Junk after Request-Line", NULL,
 	  "GET / HTTP/1.1 blah\r\nHost: example.com\r\n", -1,
 	  SOUP_STATUS_BAD_REQUEST,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "NUL in Method", NULL,
 	  "G\x00T / HTTP/1.1\r\nHost: example.com\r\n", 37,
 	  SOUP_STATUS_BAD_REQUEST,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "NUL at beginning of Method", "666316",
 	  "\x00 / HTTP/1.1\r\nHost: example.com\r\n", 35,
 	  SOUP_STATUS_BAD_REQUEST,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "NUL in Path", NULL,
 	  "GET /\x00 HTTP/1.1\r\nHost: example.com\r\n", 38,
 	  SOUP_STATUS_BAD_REQUEST,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "No terminating CRLF", NULL,
 	  "GET / HTTP/1.1\r\nHost: example.com", -1,
 	  SOUP_STATUS_BAD_REQUEST,
 	  NULL, NULL, -1,
-	  { { NULL } }
+	  { { NULL } }, 0
 	},
 
 	{ "Unrecognized expectation", NULL,
 	  "GET / HTTP/1.1\r\nHost: example.com\r\nExpect: the-impossible\r\n", -1,
 	  SOUP_STATUS_EXPECTATION_FAILED,
 	  NULL, NULL, -1,
-	  { { NULL } }
-	}
+	  { { NULL } }, 0
+	},
+
+	// https://gitlab.gnome.org/GNOME/libsoup/-/issues/377
+	{ "NUL in header name", NULL,
+	  "GET / HTTP/1.1\r\nHost\x00: example.com\r\n", 36,
+	  SOUP_STATUS_BAD_REQUEST,
+	  NULL, NULL, -1,
+	  { { NULL } }, 0
+	},
+
+	{ "NUL in header value", NULL,
+	  "HTTP/1.1 200 OK\r\nFoo: b\x00" "ar\r\n", 28,
+	  SOUP_STATUS_BAD_REQUEST,
+           NULL, NULL, -1,
+	  { { NULL } }, 0
+	},
+
+	{ "CR and LF were incorrectly permitted within request URIs",
+	  "https://gitlab.gnome.org/GNOME/libsoup/-/issues/380",
+	  "GET /\r\n HTTP/1.1\r\nHost: example.com\r\n",
+	  -1,
+	  SOUP_STATUS_BAD_REQUEST,
+	  NULL, NULL, -1,
+	  { { NULL } }, 0
+	},
+
+	{ "CR and LF incorrectly allowed in request method",
+	  "https://gitlab.gnome.org/GNOME/libsoup/-/issues/441",
+	  "G\r\nET / HTTP/1.1\r\nHost: example.com\r\n",
+	  -1,
+	  SOUP_STATUS_BAD_REQUEST,
+	  NULL, NULL, -1,
+	  { { NULL } }, 0
+	},
+
+	{ "Only newlines", NULL,
+	  only_newlines, sizeof (only_newlines),
+	  SOUP_STATUS_BAD_REQUEST,
+           NULL, NULL, -1,
+	  { { NULL } }, 0
+	},
+
+	{ "Duplicate Host headers",
+	  "https://gitlab.gnome.org/GNOME/libsoup/-/issues/472",
+	  "GET / HTTP/1.1\r\nHost: example.com\r\nHost: example.org\r\n",
+	  -1,
+	  SOUP_STATUS_BAD_REQUEST,
+	  NULL, NULL, -1,
+	  { { NULL } },
+	  G_LOG_LEVEL_WARNING
+	},
+
+	{ "Duplicate Host headers, case insensitive",
+	  "https://gitlab.gnome.org/GNOME/libsoup/-/issues/472",
+	  "GET / HTTP/1.1\r\nHost: example.com\r\nhost: example.org\r\n",
+	  -1,
+	  SOUP_STATUS_BAD_REQUEST,
+	  NULL, NULL, -1,
+	  { { NULL } },
+	  G_LOG_LEVEL_WARNING
+	},
+
+        { "Duplicate Content-Length with different value",
+          "https://gitlab.gnome.org/GNOME/libsoup/-/issues/500",
+          "POST / HTTP/1.1\r\nContent-Length: 2\r\nContent-Length: 4\r\n",
+          -1,
+          SOUP_STATUS_BAD_REQUEST,
+          NULL, NULL, -1,
+          { { NULL } }, 0
+        },
+
+        { "Duplicate Content-Length with the same decimal value", NULL,
+          "POST / HTTP/1.1\r\nContent-Length: 04\r\nContent-Length: 4\r\n",
+          -1,
+          SOUP_STATUS_BAD_REQUEST,
+          NULL, NULL, -1,
+          { { NULL } }, 0
+        },
+
+        { "Header fileds too large", NULL,
+          "GET / HTTP/1.1\r\n",
+          (18 + 256) * 1024,
+          SOUP_STATUS_BAD_REQUEST,
+          NULL, NULL, -1,
+          { { NULL } }, 0
+        }
 };
 static const int num_reqtests = G_N_ELEMENTS (reqtests);
 
@@ -620,21 +712,18 @@ static struct ResponseTest {
 	    { NULL } }
 	},
 
-	{ "NUL in header name", "760832",
-	  "HTTP/1.1 200 OK\r\nF\x00oo: bar\r\n", 28,
-	  SOUP_HTTP_1_1, SOUP_STATUS_OK, "OK",
-	  { { "Foo", "bar" },
-	    { NULL }
-	  }
-	},
-
-	{ "NUL in header value", "760832",
-	  "HTTP/1.1 200 OK\r\nFoo: b\x00" "ar\r\n", 28,
-	  SOUP_HTTP_1_1, SOUP_STATUS_OK, "OK",
-	  { { "Foo", "bar" },
-	    { NULL }
-	  }
-	},
+        /* web-platform-tests fetch/api/basic/header-value-combining.any.js, fixture
+         * xhr/resources/header-content-length-twice.asis, expects
+         * Headers.get("content-length") to be "0, 0".
+         */
+        { "Duplicate Content-Length with the same value",
+          "https://fetch.spec.whatwg.org/#content-length-header",
+          "HTTP/1.0 200 NANANA\r\nCONTENT-LENGTH:  0\r\ncontent-length:\t 0\r\n", -1,
+          SOUP_HTTP_1_0, SOUP_STATUS_OK, "NANANA",
+          { { "Content-Length", "0, 0" },
+            { NULL }
+          }
+        },
 
 	/********************************/
 	/*** VALID CONTINUE RESPONSES ***/
@@ -663,6 +752,13 @@ static struct ResponseTest {
 	/*************************/
 	/*** INVALID RESPONSES ***/
 	/*************************/
+
+        { "Duplicate Content-Length with different values",
+          "https://gitlab.gnome.org/GNOME/libsoup/-/issues/500",
+          "HTTP/1.1 200 ok\r\nContent-Length: 2\r\nContent-Length: 4\r\n", -1,
+          -1, 0, NULL,
+          { { NULL } }
+        },
 
 	{ "Invalid HTTP version", NULL,
 	  "HTTP/1.2 200 OK\r\nFoo: bar\r\n", -1,
@@ -768,6 +864,25 @@ static struct ResponseTest {
 	  { { NULL }
 	  }
 	},
+
+	// https://gitlab.gnome.org/GNOME/libsoup/-/issues/377
+	{ "NUL in header name", NULL,
+	  "HTTP/1.1 200 OK\r\nF\x00oo: bar\r\n", 28,
+	  -1, 0, NULL,
+	  { { NULL } }
+	},
+
+	{ "NUL in header value", "760832",
+	  "HTTP/1.1 200 OK\r\nFoo: b\x00" "ar\r\n", 28,
+	  -1, 0, NULL,
+	  { { NULL } }
+	},
+
+        { "Header fileds too large", NULL,
+          "HTTP/1.0 200 ok\r\n", (20 + 256) * 1024,
+          -1, 0, NULL,
+	  { { NULL } }
+	},
 };
 static const int num_resptests = G_N_ELEMENTS (resptests);
 
@@ -831,6 +946,17 @@ static struct ParamListTest {
 	    { "filename", "t\xC3\xA9st.txt" },
 	  },
 	},
+
+        /* This tests invalid UTF-8 data which *should* never be passed here but it was designed to be robust against it. */
+        { TRUE,
+              "invalid*=\x69\x27\x27\x93\x93\x93\x93\xff\x61\x61\x61\x61\x61\x61\x61\x62\x63\x64\x65\x0a; filename*=iso-8859-1''\x69\x27\x27\x93\x93\x93\x93\xff\x61\x61\x61\x61\x61\x61\x61\x62\x63\x64\x65\x0a; foo",
+              {
+                    { "filename", "i''\302\223\302\223\302\223\302\223\303\277aaaaaaabcde" },
+                    { "invalid", "\302\223\302\223\302\223\302\223\303\277aaaaaaabcde" },
+                    { "foo", NULL },
+
+                },
+        }
 };
 static const int num_paramlisttests = G_N_ELEMENTS (paramlisttests);
 
@@ -851,7 +977,7 @@ check_headers (Header *headers, SoupMessageHeaders *hdrs)
 	}
 
 	for (i = 0, h = header_names; headers[i].name && h; i++, h = h->next) {
-		g_assert (g_ascii_strcasecmp (h->data, headers[i].name) == 0);
+		g_assert_true (g_ascii_strcasecmp (h->data, headers[i].name) == 0);
 
 		value = soup_message_headers_get_list (hdrs, headers[i].name);
 		g_assert_cmpstr (value, ==, headers[i].value);
@@ -887,10 +1013,17 @@ do_request_tests (void)
 			len = strlen (reqtests[i].request);
 		else
 			len = reqtests[i].length;
+
+		if (reqtests[i].log_flags)
+			g_test_expect_message ("libsoup", reqtests[i].log_flags, "*");
+
 		status = soup_headers_parse_request (reqtests[i].request, len,
 						     headers, &method, &path,
 						     &version);
 		g_assert_cmpint (status, ==, reqtests[i].status);
+		if (reqtests[i].log_flags)
+			g_test_assert_expected_messages ();
+
 		if (SOUP_STATUS_IS_SUCCESSFUL (status)) {
 			g_assert_cmpstr (method, ==, reqtests[i].method);
 			g_assert_cmpstr (path, ==, reqtests[i].path);
@@ -1034,6 +1167,19 @@ do_param_list_tests (void)
 #define RFC5987_TEST_HEADER_FALLBACK "attachment; filename*=Unknown''t%FF%FF%FFst.txt; filename=\"test.txt\""
 #define RFC5987_TEST_HEADER_NO_TYPE  "filename=\"test.txt\""
 #define RFC5987_TEST_HEADER_NO_TYPE_2  "filename=\"test.txt\"; foo=bar"
+#define RFC5987_TEST_HEADER_EMPTY_FILENAME ";filename"
+
+static const struct {
+        const char *description;
+        const char *filename;
+        const char *sanitized;
+} filenames[] = {
+        { "Valid space", "test 1.txt", "test 1.txt" },
+        { "Invalid leading", "/test.txt", "test.txt" },
+        { "Invalid trailing", "test.txt.\n", "test.txt" },
+        { "Invalid leading and trailing", " \ttest.txt/", "test.txt" },
+        { "Invalid characters", "**t/e:<s>t~|.t\n\rxt", "__t_e__s_t__.t__xt" }
+};
 
 static void
 do_content_disposition_tests (void)
@@ -1044,6 +1190,7 @@ do_content_disposition_tests (void)
 	char *disposition;
 	GBytes *buffer;
 	SoupMultipart *multipart;
+        int i;
 
 	hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_MULTIPART);
 	params = g_hash_table_new (g_str_hash, g_str_equal);
@@ -1134,6 +1281,38 @@ do_content_disposition_tests (void)
         g_assert_cmpstr (parameter2, ==, "bar");
 	g_hash_table_destroy (params);
 
+        /* Empty filename */
+        soup_message_headers_clear (hdrs);
+        soup_message_headers_append (hdrs, "Content-Disposition",
+				     RFC5987_TEST_HEADER_EMPTY_FILENAME);
+	if (!soup_message_headers_get_content_disposition (hdrs,
+							   &disposition,
+							   &params)) {
+		soup_test_assert (FALSE, "empty filename decoding FAILED");
+		return;
+	}
+        g_free (disposition);
+        g_assert_false (g_hash_table_contains (params, "filename"));
+	g_hash_table_destroy (params);
+
+        /* Sanitized filenames */
+        for (i = 0; i < G_N_ELEMENTS (filenames); i++) {
+                debug_printf (1, "  %s \n", filenames[i].description);
+
+                soup_message_headers_clear (hdrs);
+                params = g_hash_table_new (g_str_hash, g_str_equal);
+                g_hash_table_insert (params, "filename", (char*)filenames[i].filename);
+                soup_message_headers_set_content_disposition (hdrs, "attachment", params);
+                g_hash_table_destroy (params);
+
+                g_assert_true (soup_message_headers_get_content_disposition (hdrs, &disposition, &params));
+                g_free (disposition);
+
+                filename = g_hash_table_lookup (params, "filename");
+                g_assert_cmpstr (filename, ==, filenames[i].sanitized);
+                g_hash_table_destroy (params);
+        }
+
 	soup_message_headers_unref (hdrs);
 
 	/* Ensure that soup-multipart always quotes filename */
@@ -1211,10 +1390,12 @@ struct {
 	{ "two", "test with spaces" },
 	{ "three", "test with \"quotes\" and \\s" },
 	{ "four", NULL },
-	{ "five", "test with \xC3\xA1\xC3\xA7\xC4\x89\xC3\xA8\xC3\xB1\xC5\xA3\xC5\xA1" }
+	{ "five", "test with \xC3\xA1\xC3\xA7\xC4\x89\xC3\xA8\xC3\xB1\xC5\xA3\xC5\xA1" },
+	{ "six", "あ,い!#$&+-.^_`|~" },
+	{ "seven", "あabc*'%123^_`|~" }
 };
 
-#define TEST_PARAMS_RESULT "one=foo, two=\"test with spaces\", three=\"test with \\\"quotes\\\" and \\\\s\", four, five*=UTF-8''test%20with%20%C3%A1%C3%A7%C4%89%C3%A8%C3%B1%C5%A3%C5%A1"
+#define TEST_PARAMS_RESULT "one=foo, two=\"test with spaces\", three=\"test with \\\"quotes\\\" and \\\\s\", four, five*=UTF-8''test%20with%20%C3%A1%C3%A7%C4%89%C3%A8%C3%B1%C5%A3%C5%A1, six*=UTF-8''%E3%81%82%2C%E3%81%84!#$&+-.^_`|~, seven*=UTF-8''%E3%81%82abc%2A%27%25123^_`|~"
 
 static void
 do_append_param_tests (void)
@@ -1238,16 +1419,21 @@ do_append_param_tests (void)
 
 static const struct {
 	const char *description, *name, *value;
-} bad_headers[] = {
-	{ "Empty name", "", "value" },
-	{ "Name with spaces", "na me", "value" },
-	{ "Name with colon", "na:me", "value" },
-	{ "Name with CR", "na\rme", "value" },
-	{ "Name with LF", "na\nme", "value" },
-	{ "Name with tab", "na\tme", "value" },
-	{ "Value with CR", "name", "val\rue" },
-	{ "Value with LF", "name", "val\nue" },
-	{ "Value with LWS", "name", "val\r\n ue" }
+} bad_header_names[] = {
+	{ "empty name", "", "value" },
+	{ "name with spaces", "na me", "value" },
+	{ "name with colon", "na:me", "value" },
+	{ "name with CR", "na\rme", "value" },
+	{ "name with LF", "na\nme", "value" },
+	{ "name with tab", "na\tme", "value" }
+};
+
+static const struct {
+        const char *description, *name, *value;
+} bad_header_values[] = {
+	{ "value with CR", "name", "val\rue" },
+	{ "value with LF", "name", "val\nue" },
+	{ "value with LWS", "name", "val\r\n ue" }
 };
 
 static void
@@ -1257,16 +1443,276 @@ do_bad_header_tests (void)
 	int i;
 
 	hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_MULTIPART);
-	for (i = 0; i < G_N_ELEMENTS (bad_headers); i++) {
-		debug_printf (1, "  %s\n", bad_headers[i].description);
 
-		g_test_expect_message ("libsoup", G_LOG_LEVEL_CRITICAL,
-				       "*soup_message_headers_append*assertion*failed*");
-		soup_message_headers_append (hdrs, bad_headers[i].name,
-					     bad_headers[i].value);
-		g_test_assert_expected_messages ();
+        /* soup_message_headers_append: bad names */
+	for (i = 0; i < G_N_ELEMENTS (bad_header_names); i++) {
+		debug_printf (1, "  Append %s\n", bad_header_names[i].description);
+
+                g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+                                       "*soup_message_headers_append*Rejecting bad name*");
+		soup_message_headers_append (hdrs, bad_header_names[i].name,
+					     bad_header_names[i].value);
+                g_test_assert_expected_messages ();
 	}
+
+        /* soup_message_headers_append: bad values */
+        for (i = 0; i < G_N_ELEMENTS (bad_header_values); i++) {
+		debug_printf (1, "  Append %s\n", bad_header_values[i].description);
+
+                g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+                                       "*soup_message_headers_append*Rejecting bad value*");
+		soup_message_headers_append (hdrs, bad_header_values[i].name,
+					     bad_header_values[i].value);
+                g_test_assert_expected_messages ();
+	}
+
+        /* soup_message_headers_replace: bad values */
+        for (i = 0; i < G_N_ELEMENTS (bad_header_values); i++) {
+		debug_printf (1, "  Replace %s\n", bad_header_values[i].description);
+
+                g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+                                       "*soup_message_headers_append*Rejecting bad value*");
+		soup_message_headers_replace (hdrs, bad_header_values[i].name,
+                                              bad_header_values[i].value);
+                g_test_assert_expected_messages ();
+	}
+
+        /* soup_message_headers_set_content_type: bad values */
+        for (i = 0; i < G_N_ELEMENTS (bad_header_values); i++) {
+                GHashTable *params;
+
+                debug_printf (1, "  Content type with %s\n", bad_header_values[i].description);
+
+                g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+                                       "*soup_message_headers_append*Rejecting bad value*");
+                soup_message_headers_set_content_type (hdrs, bad_header_values[i].value, NULL);
+                g_test_assert_expected_messages ();
+
+                g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+                                       "*soup_message_headers_append*Rejecting bad value*");
+                params = g_hash_table_new (g_str_hash, g_str_equal);
+                g_hash_table_insert (params, CONTENT_TYPE_TEST_ATTRIBUTE, (gpointer)bad_header_values[i].value);
+                soup_message_headers_set_content_type (hdrs, CONTENT_TYPE_TEST_MIME_TYPE, params);
+                g_hash_table_destroy (params);
+                g_test_assert_expected_messages ();
+        }
+
+        /* soup_message_headers_set_content_disposition: bad values */
+        for (i = 0; i < G_N_ELEMENTS (bad_header_values); i++) {
+                debug_printf (1, "  Content disposition with %s\n", bad_header_values[i].description);
+
+                g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+                                       "*soup_message_headers_append*Rejecting bad value*");
+                soup_message_headers_set_content_disposition (hdrs, bad_header_values[i].value, NULL);
+                g_test_assert_expected_messages ();
+        }
 	soup_message_headers_unref (hdrs);
+}
+
+static const struct {
+	const char *description, *name, *value;
+} case_sensitive_headers[] = {
+	{ "Sec-WebSocket-Protocol is case sensitive", "Sec-WebSocket-Protocol", "foo,bar,qux" },
+};
+
+static void
+do_case_sensitive_header_tests (void)
+{
+	int i;
+
+	const char* token = "foo";
+	for (i = 0; i < G_N_ELEMENTS (case_sensitive_headers); i++) {
+		const char* value = case_sensitive_headers[i].value;
+		char* token_uppercase = g_ascii_strup (token, -1);
+
+		g_assert_true (soup_header_contains (value, token));
+		g_assert_true (soup_header_contains (value, token_uppercase));
+		g_assert_true (soup_header_contains_case_sensitive (value, token));
+		g_assert_false (soup_header_contains_case_sensitive (value, token_uppercase));
+
+		g_free (token_uppercase);
+	}
+}
+
+static void
+do_append_duplicate_host_test (void)
+{
+	SoupMessageHeaders *hdrs;
+	const char *list_value;
+
+	hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
+	soup_message_headers_append (hdrs, "Host", "a");
+
+	g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+		               "soup_message_headers_append_common: Rejecting duplicate Host header");
+	soup_message_headers_append (hdrs, "Host", "b");
+	g_test_assert_expected_messages ();
+
+        /* Case insensitive */
+	g_test_expect_message ("libsoup", G_LOG_LEVEL_WARNING,
+		               "soup_message_headers_append_common: Rejecting duplicate Host header");
+	soup_message_headers_append (hdrs, "host", "b");
+	g_test_assert_expected_messages ();
+
+	list_value = soup_message_headers_get_list (hdrs, "Host");
+	g_assert_cmpstr (list_value, ==, "a");
+
+	soup_message_headers_unref (hdrs);
+
+	/* Duplicate Host headers are allowed in responses, for web compat. */
+	hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_RESPONSE);
+	soup_message_headers_append (hdrs, "Host", "a");
+	soup_message_headers_append (hdrs, "Host", "b");
+	list_value = soup_message_headers_get_list (hdrs, "Host");
+	g_assert_cmpstr (list_value, ==, "a, b");
+	soup_message_headers_unref (hdrs);
+}
+
+static void
+do_append_duplicate_content_length_test (void)
+{
+        SoupMessageHeaders *hdrs;
+        const char *list_value;
+
+        hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
+        soup_message_headers_append (hdrs, "Content-Length", "42");
+
+        /* Inserting the same value keeps both field lines, per RFC 9110 5.3 and
+         * the WHATWG Fetch Standard, but framing still uses the single value.
+         */
+        soup_message_headers_append (hdrs, "Content-Length", "42");
+        list_value = soup_message_headers_get_list (hdrs, "Content-Length");
+        g_assert_cmpstr (list_value, ==, "42, 42");
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "42");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 42);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CONTENT_LENGTH);
+
+        /* Inserting a different value does nothing */
+        soup_message_headers_append (hdrs, "Content-Length", "45");
+        list_value = soup_message_headers_get_list (hdrs, "Content-Length");
+        g_assert_cmpstr (list_value, ==, "42, 42");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 42);
+
+        soup_message_headers_unref (hdrs);
+
+        /* Values are compared textually, not numerically */
+        hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
+        soup_message_headers_append (hdrs, "Content-Length", "042");
+
+        soup_message_headers_append (hdrs, "Content-Length", "42");
+        list_value = soup_message_headers_get_list (hdrs, "Content-Length");
+        g_assert_cmpstr (list_value, ==, "042");
+
+        soup_message_headers_append (hdrs, "Content-Length", "042");
+        list_value = soup_message_headers_get_list (hdrs, "Content-Length");
+        g_assert_cmpstr (list_value, ==, "042, 042");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 42);
+
+        soup_message_headers_unref (hdrs);
+}
+
+static void
+do_content_length_test (void)
+{
+        SoupMessageHeaders *hdrs;
+
+        hdrs = soup_message_headers_new (SOUP_MESSAGE_HEADERS_REQUEST);
+
+        /* Add Content-Length using soup_message_headers_append() */
+        soup_message_headers_append (hdrs, "Content-Length", "42");
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "42");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 42);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CONTENT_LENGTH);
+        soup_message_headers_clear (hdrs);
+
+        /* Add Content-Length using soup_message_headers_set_content_length() */
+        soup_message_headers_set_content_length (hdrs, 24);
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "24");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 24);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CONTENT_LENGTH);
+        soup_message_headers_clear (hdrs);
+
+        /* Set the encoding before the content length */
+        soup_message_headers_set_encoding (hdrs, SOUP_ENCODING_CONTENT_LENGTH);
+        soup_message_headers_set_content_length (hdrs, 52);
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "52");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 52);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CONTENT_LENGTH);
+        soup_message_headers_clear (hdrs);
+
+        /* Set the encoding after the content length */
+        soup_message_headers_set_content_length (hdrs, 25);
+        soup_message_headers_set_encoding (hdrs, SOUP_ENCODING_CONTENT_LENGTH);
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "25");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 25);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CONTENT_LENGTH);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding before content length using soup_message_headers_append() */
+        soup_message_headers_append (hdrs, "Transfer-Encoding", "chunked");
+        soup_message_headers_append (hdrs, "Content-Length", "84");
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "84");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 0);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding before content length using soup_message_headers_append() and soup_message_headers_set_content_length() */
+        soup_message_headers_append (hdrs, "Transfer-Encoding", "chunked");
+        soup_message_headers_set_content_length (hdrs, 48);
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "48");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 48);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CONTENT_LENGTH);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding before content length using soup_message_headers_set_encoding() and soup_message_headers_append() */
+        soup_message_headers_set_encoding (hdrs, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_append (hdrs, "Content-Length", "92");
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "92");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 0);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding before content length using soup_message_headers_set_encoding() and soup_message_headers_set_content_length() */
+        soup_message_headers_set_encoding (hdrs, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_set_content_length (hdrs, 29);
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "29");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 29);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CONTENT_LENGTH);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding after content length using soup_message_headers_append() */
+        soup_message_headers_append (hdrs, "Content-Length", "21");
+        soup_message_headers_append (hdrs, "Transfer-Encoding", "chunked");
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "21");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 0);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding after content length using soup_message_headers_set_content_length() and soup_message_headers_append() */
+        soup_message_headers_set_content_length (hdrs, 12);
+        soup_message_headers_append (hdrs, "Transfer-Encoding", "chunked");
+        g_assert_cmpstr (soup_message_headers_get_one (hdrs, "Content-Length"), ==, "12");
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 0);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding after content length using soup_message_headers_append() and soup_message_headers_set_encoding() */
+        soup_message_headers_append (hdrs, "Content-Length", "21");
+        soup_message_headers_set_encoding (hdrs, SOUP_ENCODING_CHUNKED);
+        g_assert_null (soup_message_headers_get_one (hdrs, "Content-Length"));
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 0);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_clear (hdrs);
+
+        /* Set different encoding after content length using soup_message_headers_set_content_length() and soup_message_headers_set_encoding() */
+        soup_message_headers_set_content_length (hdrs, 35);
+        soup_message_headers_set_encoding (hdrs, SOUP_ENCODING_CHUNKED);
+        g_assert_null (soup_message_headers_get_one (hdrs, "Content-Length"));
+        g_assert_cmpint (soup_message_headers_get_content_length (hdrs), ==, 0);
+        g_assert_cmpuint (soup_message_headers_get_encoding (hdrs), ==, SOUP_ENCODING_CHUNKED);
+        soup_message_headers_clear (hdrs);
+
+        soup_message_headers_unref (hdrs);
 }
 
 int
@@ -1284,6 +1730,10 @@ main (int argc, char **argv)
 	g_test_add_func ("/header-parsing/content-type", do_content_type_tests);
 	g_test_add_func ("/header-parsing/append-param", do_append_param_tests);
 	g_test_add_func ("/header-parsing/bad", do_bad_header_tests);
+	g_test_add_func ("/header-parsing/case-sensitive", do_case_sensitive_header_tests);
+	g_test_add_func ("/header-parsing/append-duplicate-host", do_append_duplicate_host_test);
+        g_test_add_func ("/header-parsing/append-duplicate-content-length", do_append_duplicate_content_length_test);
+        g_test_add_func ("/header-parsing/content-length", do_content_length_test);
 
 	ret = g_test_run ();
 

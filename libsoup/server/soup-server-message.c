@@ -22,15 +22,15 @@
  *
  * An HTTP server request and response pair.
  *
- * A SoupServerMessage represents an HTTP message that is being sent or
+ * A [class@ServerMessage] represents an HTTP message that is being sent or
  * received on a [class@Server].
  *
- * [class@Server] will create `SoupServerMessage`s automatically for
+ * [class@Server] will create [class@ServerMessage]s automatically for
  * incoming requests, which your application will receive via handlers.
  *
  * Note that libsoup's terminology here does not quite match the HTTP
  * specification: in RFC 2616, an "HTTP-message" is *either* a Request, *or* a
- * Response. In libsoup, a #SoupServerMessage combines both the request and the
+ * Response. In libsoup, a [class@ServerMessage] combines both the request and the
  * response.
  **/
 
@@ -59,6 +59,7 @@ struct _SoupServerMessage {
         SoupMessageHeaders *response_headers;
 
         SoupServerMessageIO *io_data;
+        GList               *websocket_extensions;
 
         gboolean                 options_ping;
 
@@ -136,6 +137,7 @@ soup_server_message_finalize (GObject *object)
         soup_message_headers_unref (msg->request_headers);
         soup_message_body_unref (msg->response_body);
         soup_message_headers_unref (msg->response_headers);
+        g_list_free_full (msg->websocket_extensions, g_object_unref);
 
         G_OBJECT_CLASS (soup_server_message_parent_class)->finalize (object);
 }
@@ -393,7 +395,7 @@ soup_server_message_class_init (SoupServerMessageClass *klass)
 	/**
 	 * SoupServerMessage:tls-peer-certificate-errors:
 	 *
-	 * The verification errors on #SoupServerMessage:tls-peer-certificate
+	 * The verification errors on [property@ServerMessage:tls-peer-certificate]
 	 *
 	 * Since: 3.2
 	 */
@@ -509,8 +511,7 @@ soup_server_message_set_auth (SoupServerMessage *msg,
                 g_object_unref (msg->auth_domain);
         msg->auth_domain = domain;
 
-        if (msg->auth_user)
-                g_free (msg->auth_user);
+        g_free (msg->auth_user);
         msg->auth_user = user;
 }
 
@@ -605,9 +606,9 @@ void
 soup_server_message_unpause (SoupServerMessage *msg)
 {
         g_return_if_fail (SOUP_IS_SERVER_MESSAGE (msg));
-        g_return_if_fail (msg->io_data != NULL);
 
-        soup_server_message_io_unpause (msg->io_data, msg);
+        if (msg->io_data)
+                soup_server_message_io_unpause (msg->io_data, msg);
 }
 
 gboolean
@@ -921,7 +922,7 @@ soup_server_message_get_uri (SoupServerMessage *msg)
  *   a data buffer containing the body of the message response.
  * @resp_length: the byte length of @resp_body.
  *
- * Convenience function to set the response body of a #SoupServerMessage. If
+ * Convenience function to set the response body of a [class@ServerMessage]. If
  * @content_type is %NULL, the response body must be empty as well.
  */
 void
@@ -939,7 +940,7 @@ soup_server_message_set_response (SoupServerMessage *msg,
 
                 soup_message_headers_replace_common (msg->response_headers,
                                                      SOUP_HEADER_CONTENT_TYPE,
-                                                     content_type);
+                                                     content_type, SOUP_HEADER_VALUE_UNTRUSTED);
                 soup_message_body_append (msg->response_body, resp_use,
                                           resp_body, resp_length);
         } else {
@@ -980,7 +981,7 @@ soup_server_message_set_redirect (SoupServerMessage *msg,
 	soup_server_message_set_status (msg, status_code, NULL);
 	location_str = g_uri_to_string (location);
 	soup_message_headers_replace_common (msg->response_headers, SOUP_HEADER_LOCATION,
-                                             location_str);
+                                             location_str, SOUP_HEADER_VALUE_UNTRUSTED);
 	g_free (location_str);
 	g_uri_unref (location);
 }
@@ -1018,7 +1019,7 @@ soup_server_message_get_socket (SoupServerMessage *msg)
  *
  * Returns: (nullable) (transfer none): the #GSocketAddress
  *   associated with the remote end of a connection, it may be
- *   %NULL if you used [class@Server.accept_iostream].
+ *   %NULL if you used [method@Server.accept_iostream].
  */
 GSocketAddress *
 soup_server_message_get_remote_address (SoupServerMessage *msg)
@@ -1081,7 +1082,7 @@ soup_server_message_get_remote_host (SoupServerMessage *msg)
  * soup_server_message_steal_connection:
  * @msg: a #SoupServerMessage
  *
- * "Steals" the HTTP connection associated with @msg from its #SoupServer. This
+ * "Steals" the HTTP connection associated with @msg from its [class@Server]. This
  * happens immediately, regardless of the current state of the connection; if
  * the response to @msg has not yet finished being sent, then it will be
  * discarded; you can steal the connection from a
@@ -1108,6 +1109,20 @@ soup_server_message_steal_connection (SoupServerMessage *msg)
         g_object_unref (msg);
 
         return stream;
+}
+
+void
+soup_server_message_set_websocket_extensions (SoupServerMessage *msg,
+                                              GList             *extensions)
+{
+        g_clear_list (&msg->websocket_extensions, g_object_unref);
+        msg->websocket_extensions = extensions;
+}
+
+GList *
+soup_server_message_steal_websocket_extensions (SoupServerMessage *msg)
+{
+        return g_steal_pointer (&msg->websocket_extensions);
 }
 
 /**

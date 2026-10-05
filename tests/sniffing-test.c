@@ -307,7 +307,7 @@ do_sniffing_test (gconstpointer data)
 	char **parts;
 
 	parts = g_strsplit (path_and_result, " => ", -1);
-	g_assert (parts && parts[0] && parts[1] && !parts[2]);
+	g_assert_true (parts && parts[0] && parts[1] && !parts[2]);
 
 	test_sniffing (parts[0], parts[1]);
 	g_strfreev (parts);
@@ -340,6 +340,51 @@ test_disabled (gconstpointer data)
 	g_bytes_unref (body);
 	g_object_unref (msg);
 	g_uri_unref (uri);
+}
+
+static void
+do_skip_whitespace_test (void)
+{
+        const gsize MARKUP_LENGTH = strlen ("<!--") + strlen ("-->");
+        SoupContentSniffer *sniffer = soup_content_sniffer_new ();
+        SoupMessage *msg = soup_message_new (SOUP_METHOD_GET, "http://example.org");
+        const char *test_cases[] = {
+                "",
+                "<rdf:RDF",
+                "<rdf:RDFxmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\"",
+                "<rdf:RDFxmlns=\"http://purl.org/rss/1.0/\"",
+        };
+
+        soup_message_headers_set_content_type (soup_message_get_response_headers (msg), "text/html", NULL);
+
+        for (guint i = 0; i < G_N_ELEMENTS (test_cases); i++) {
+                const char *trailing_data = test_cases[i];
+                gsize leading_zeros = 512 - MARKUP_LENGTH - strlen (trailing_data);
+                gsize testsize = MARKUP_LENGTH + leading_zeros + strlen (trailing_data);
+                guint8 *data = g_malloc0 (testsize);
+                guint8 *p = data;
+                char *content_type;
+                GBytes *buffer;
+
+                // Format of <!--[0x00 * $leading_zeros]-->$trailing_data
+                memcpy (p, "<!--", strlen ("<!--"));
+                p += strlen ("<!--");
+                p += leading_zeros;
+                memcpy (p, "-->", strlen ("-->"));
+                p += strlen ("-->");
+                if (strlen (trailing_data))
+                        memcpy (p, trailing_data, strlen (trailing_data));
+                // Purposefully not NUL terminated.                
+
+                buffer = g_bytes_new_take (g_steal_pointer (&data), testsize);
+                content_type = soup_content_sniffer_sniff (sniffer, msg, buffer, NULL);
+
+                g_free (content_type);
+                g_bytes_unref (buffer);
+        }
+
+        g_object_unref (msg);
+        g_object_unref (sniffer);
 }
 
 int
@@ -516,6 +561,8 @@ main (int argc, char **argv)
 	g_test_add_data_func ("/sniffing/disabled",
 			      "/text_or_binary/home.gif",
 			      test_disabled);
+
+	g_test_add_func ("/sniffing/whitespace", do_skip_whitespace_test);
 
 	ret = g_test_run ();
 

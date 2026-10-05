@@ -244,6 +244,7 @@ do_multithread_basic_test (Test         *test,
                 GTask *task;
 
                 task = g_task_new (NULL, NULL, (GAsyncReadyCallback)task_finished_cb, &finished_count);
+                g_task_set_source_tag (task, do_multithread_basic_test);
                 g_task_set_task_data (task, test, NULL);
                 g_task_run_in_thread (task, (GTaskThreadFunc)(test->flags & BASIC_SYNC ? task_sync_function : task_async_function));
                 g_object_unref (task);
@@ -365,14 +366,12 @@ do_multithread_connections_test (Test         *test,
         body = soup_test_session_async_send (test->session, msg, NULL, NULL);
         g_bytes_unref (body);
 
-        while (g_main_context_pending (NULL))
-                g_main_context_iteration (NULL, FALSE);
-
         g_assert_nonnull (conn);
         g_assert_cmpuint (soup_connection_get_state (conn), ==, SOUP_CONNECTION_IDLE);
 
         /* An idle connection can be reused by another thread */
         task = g_task_new (NULL, NULL, NULL, NULL);
+        g_task_set_source_tag (task, do_multithread_connections_test);
         g_task_set_task_data (task, test, NULL);
         g_task_run_in_thread_sync (task, (GTaskThreadFunc)(test->flags & BASIC_SYNC ? connections_test_task_sync_function : connections_test_task_async_function));
         thread_conn = g_task_propagate_pointer (task, NULL);

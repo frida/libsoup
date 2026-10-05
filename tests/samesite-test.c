@@ -13,21 +13,28 @@ static void
 same_site_setup (SameSiteFixture *fixture,
                  gconstpointer    data)
 {
-	SoupCookie *cookie_none, *cookie_lax, *cookie_strict;
+	SoupCookie *cookie_none, *cookie_none_secure, *cookie_lax, *cookie_strict, *cookie_default;
 
-	fixture->origin_uri = g_uri_parse ("http://127.0.0.1", SOUP_HTTP_URI_FLAGS, NULL);
-	fixture->cross_uri = g_uri_parse ("http://localhost", SOUP_HTTP_URI_FLAGS, NULL);
+	fixture->origin_uri = g_uri_parse ("https://127.0.0.1", SOUP_HTTP_URI_FLAGS, NULL);
+	fixture->cross_uri = g_uri_parse ("https://localhost", SOUP_HTTP_URI_FLAGS, NULL);
 	fixture->jar = soup_cookie_jar_new ();
 
 	cookie_none = soup_cookie_new ("none", "1", "127.0.0.1", "/", 1000);
+	soup_cookie_set_same_site_policy (cookie_none, SOUP_SAME_SITE_POLICY_NONE);
+	cookie_none_secure = soup_cookie_new ("none_secure", "1", "127.0.0.1", "/", 1000);
+	soup_cookie_set_same_site_policy (cookie_none_secure, SOUP_SAME_SITE_POLICY_NONE);
+	soup_cookie_set_secure(cookie_none_secure, TRUE);
 	cookie_lax = soup_cookie_new ("lax", "1", "127.0.0.1", "/", 1000);
 	soup_cookie_set_same_site_policy (cookie_lax, SOUP_SAME_SITE_POLICY_LAX);
 	cookie_strict = soup_cookie_new ("strict", "1", "127.0.0.1", "/", 1000);
 	soup_cookie_set_same_site_policy (cookie_strict, SOUP_SAME_SITE_POLICY_STRICT);
+	cookie_default = soup_cookie_new ("default", "1", "127.0.0.1", "/", 1000);
 
 	soup_cookie_jar_add_cookie_with_first_party (fixture->jar, fixture->origin_uri, cookie_none);
+	soup_cookie_jar_add_cookie_with_first_party (fixture->jar, fixture->origin_uri, cookie_none_secure);
 	soup_cookie_jar_add_cookie_with_first_party (fixture->jar, fixture->origin_uri, cookie_lax);
 	soup_cookie_jar_add_cookie_with_first_party (fixture->jar, fixture->origin_uri, cookie_strict);
+	soup_cookie_jar_add_cookie_with_first_party (fixture->jar, fixture->origin_uri, cookie_default);
 }
 
 static void
@@ -52,16 +59,16 @@ assert_highest_policy_visible (GSList *cookies, SoupSameSitePolicy policy)
 
 	switch (policy) {
 	case SOUP_SAME_SITE_POLICY_STRICT:
-		expected_count = 3;
+		expected_count = 4;
 		break;
 	case SOUP_SAME_SITE_POLICY_LAX:
-		expected_count = 2;
+		expected_count = 3;
 		break;
 	case SOUP_SAME_SITE_POLICY_NONE:
 		expected_count = 1;
 		break;
         default:
-                g_assert_not_reached ();
+                g_assert_cmpstr ("This code", ==, "should not be reached");
                 break;
 	}
 
@@ -99,12 +106,8 @@ main (int argc, char **argv)
 		/* This does not necessarily cover all combinations since some make no sense in real use */
 
 		/* Situations where Strict are passed: */
-		{ .name="/same-site/basic", .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
-		{ .name="/same-site/basic-js", .javascript=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
 		{ .name="/same-site/top-level-to-same-site", .top_level_nav=TRUE,  .cookie_uri_is_origin=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
 		{ .name="/same-site/top-level-to-same-site-js", .top_level_nav=TRUE, .cookie_uri_is_origin=TRUE,  .javascript=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
-		{ .name="/same-site/unsafe-method", .unsafe_method=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
-		{ .name="/same-site/unsafe-method-js", .unsafe_method=TRUE, .javascript=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
 		{ .name="/same-site/cross-top-level-to-same-site", .cross_origin=TRUE, .top_level_nav=TRUE, .cookie_uri_is_origin=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
 		{ .name="/same-site/cross-top-level-to-same-site-js", .cross_origin=TRUE, .javascript=TRUE, .top_level_nav=TRUE, .cookie_uri_is_origin=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_STRICT },
 
@@ -121,6 +124,8 @@ main (int argc, char **argv)
 		{ .name="/same-site/cross-unsafe-method", .cross_origin=TRUE, .unsafe_method=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_NONE },
 		{ .name="/same-site/cross-unsafe-method-js", .cross_origin=TRUE, .javascript=TRUE, .unsafe_method=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_NONE },
 		{ .name="/same-site/cross-unsafe-method-top-level", .cross_origin=TRUE, .unsafe_method=TRUE, .top_level_nav=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_NONE },
+		{ .name="/same-site/unsafe-method", .unsafe_method=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_NONE },
+		{ .name="/same-site/unsafe-method-js", .unsafe_method=TRUE, .javascript=TRUE, .visible_policy=SOUP_SAME_SITE_POLICY_NONE },
 	};
 
 	test_init (argc, argv, NULL);

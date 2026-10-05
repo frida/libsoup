@@ -31,7 +31,7 @@
  **/
 
 #define XDIGIT(c) ((c) <= '9' ? (c) - '0' : ((c) & 0x4F) - 'A' + 10)
-#define HEXCHAR(s) ((XDIGIT (s[1]) << 4) + XDIGIT (s[2]))
+#define HEXCHAR(s) ((XDIGIT ((s)[1]) << 4) + XDIGIT ((s)[2]))
 
 static gboolean
 form_decode (char *part)
@@ -99,7 +99,7 @@ soup_form_decode (const char *encoded_form)
 
 /**
  * soup_form_decode_multipart:
- * @multipart: a #SoupMultipart
+ * @multipart: (transfer full): a #SoupMultipart
  * @file_control_name: (nullable): the name of the HTML file upload control
  * @filename: (out) (optional): return location for the name of the uploaded file
  * @content_type: (out) (optional): return location for the MIME type of the uploaded file
@@ -168,12 +168,18 @@ soup_form_decode_multipart (SoupMultipart *multipart,
 		}
 
 		if (file_control_name && !strcmp (name, file_control_name)) {
-			if (filename)
+			if (filename) {
+				g_free (*filename);
 				*filename = g_strdup (g_hash_table_lookup (params, "filename"));
-			if (content_type)
+			}
+			if (content_type) {
+				g_free (*content_type);
 				*content_type = g_strdup (soup_message_headers_get_content_type (part_headers, NULL));
-			if (file)
+			}
+			if (file) {
+				g_clear_pointer (file, g_bytes_unref);
 				*file = g_bytes_ref (part_body);
+			}
 		} else {
 			g_hash_table_insert (form_data_set,
 					     g_strdup (name),

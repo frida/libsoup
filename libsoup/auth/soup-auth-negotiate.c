@@ -45,7 +45,7 @@ soup_auth_negotiate_supported (void)
 #endif
 }
 
-#define AUTH_GSS_ERROR      -1
+#define AUTH_GSS_ERROR      (-1)
 #define AUTH_GSS_COMPLETE    1
 #define AUTH_GSS_CONTINUE    0
 
@@ -219,8 +219,7 @@ soup_auth_negotiate_get_connection_authorization (SoupConnectionAuth *auth,
 	}
 
 	if (conn->response_header) {
-		header = conn->response_header;
-		conn->response_header = NULL;
+		header = g_steal_pointer (&conn->response_header);
 		conn->state = SOUP_NEGOTIATE_SENT_RESPONSE;
 	}
 
@@ -267,7 +266,7 @@ soup_auth_negotiate_update_connection (SoupConnectionAuth *auth, SoupMessage *ms
 			if (!g_object_get_data (G_OBJECT (msg), "negotiate-got-headers-connected")) {
 				/* Wait for the 2xx response to verify server response */
 				g_signal_connect_data (msg,
-						       "got_headers",
+						       "got-headers",
 						       G_CALLBACK (check_server_response),
 						       g_object_ref (auth),
 						       (GClosureNotify) g_object_unref,
@@ -624,8 +623,7 @@ soup_gss_client_step (SoupNegotiateConnectionState *conn, const gchar *challenge
 out:
 	if (out.value)
 		gss_release_buffer (&min_stat, &out);
-	if (in.value)
-		g_free (in.value);
+	g_free (in.value);
 	return ret;
 }
 

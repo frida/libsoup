@@ -23,21 +23,32 @@
 #endif
 
 #include <brotli/decode.h>
+#include <brotli/shared_dictionary.h>
 #include <gio/gio.h>
 
+#include "soup-dictionary-header-private.h"
 #include "soup-brotli-decompressor.h"
+#include "soup-compression-dictionary-decoder.h"
+
+/* dcb framing: 4-byte magic (\xffDCB) + 32-byte SHA-256 hash of the dictionary */
+static const guint8 DCB_MAGIC[] = { 0xff, 'D', 'C', 'B' };
+#define DCB_HEADER_SIZE (sizeof (DCB_MAGIC) + 32)
 
 struct _SoupBrotliDecompressor
 {
 	GObject parent_instance;
 	BrotliDecoderState *state;
 	GError *last_error;
+	GBytes *dictionary;
+	SoupDictionaryHeader header;
 };
 
 static void soup_brotli_decompressor_iface_init (GConverterIface *iface);
+static void soup_brotli_decompressor_dictionary_decoder_init (SoupCompressionDictionaryDecoderInterface *iface);
 
 G_DEFINE_FINAL_TYPE_WITH_CODE (SoupBrotliDecompressor, soup_brotli_decompressor, G_TYPE_OBJECT,
-                               G_IMPLEMENT_INTERFACE (G_TYPE_CONVERTER, soup_brotli_decompressor_iface_init))
+                               G_IMPLEMENT_INTERFACE (G_TYPE_CONVERTER, soup_brotli_decompressor_iface_init)
+                               G_IMPLEMENT_INTERFACE (SOUP_TYPE_COMPRESSION_DICTIONARY_DECODER, soup_brotli_decompressor_dictionary_decoder_init))
 
 SoupBrotliDecompressor *
 soup_brotli_decompressor_new (void)
@@ -100,13 +111,45 @@ soup_brotli_decompressor_convert (GConverter      *converter,
 		return G_CONVERTER_ERROR;
 	}
 
+	if (!self->header.consumed)
+		g_debug ("content-decoder: brotli decoder %p: convert %zu bytes, dictionary=%s, flags=0x%x",
+			 self, inbuf_size, self->dictionary ? "set" : "NULL", flags);
+
 	/* NOTE: all error domains/codes must match GZlibDecompressor */
+
+	if (self->dictionary && !self->header.consumed) {
+		if (!soup_dictionary_header_consume (&self->header,
+							     DCB_MAGIC, sizeof (DCB_MAGIC),
+							     self->dictionary,
+							     &next_in, &available_in,
+							     DCB_HEADER_SIZE,
+							     "SoupBrotliDecompressorError: Invalid dcb magic header",
+							     "SoupBrotliDecompressorError: Dictionary hash mismatch",
+							     error))
+			return G_CONVERTER_ERROR;
+
+		if (available_in == 0) {
+			*bytes_read = inbuf_size;
+			*bytes_written = 0;
+			if (inbuf_size == 0) {
+				g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_PARTIAL_INPUT,
+						     "SoupBrotliDecompressorError: More input required for dictionary header");
+				return G_CONVERTER_ERROR;
+			}
+			return G_CONVERTER_CONVERTED;
+		}
+	}
 
 	if (self->state == NULL) {
 		self->state = BrotliDecoderCreateInstance (NULL, NULL, NULL);
 		if (self->state == NULL) {
 			g_set_error_literal (error, G_IO_ERROR, G_IO_ERROR_FAILED, "SoupBrotliDecompressorError: Failed to initialize state");
 			return G_CONVERTER_ERROR;
+		}
+		if (self->dictionary) {
+			gsize dict_size;
+			const uint8_t *dict_data = g_bytes_get_data (self->dictionary, &dict_size);
+			BrotliDecoderAttachDictionary (self->state, BROTLI_SHARED_DICTIONARY_RAW, dict_size, dict_data);
 		}
 	}
 
@@ -164,6 +207,7 @@ soup_brotli_decompressor_reset (GConverter *converter)
 	if (self->state && BrotliDecoderIsUsed (self->state))
 		g_clear_pointer (&self->state, BrotliDecoderDestroyInstance);
 	g_clear_error (&self->last_error);
+	soup_dictionary_header_init (&self->header);
 }
 
 static void
@@ -172,6 +216,7 @@ soup_brotli_decompressor_finalize (GObject *object)
 	SoupBrotliDecompressor *self = (SoupBrotliDecompressor *)object;
 	g_clear_pointer (&self->state, BrotliDecoderDestroyInstance);
 	g_clear_error (&self->last_error);
+	g_clear_pointer (&self->dictionary, g_bytes_unref);
 	G_OBJECT_CLASS (soup_brotli_decompressor_parent_class)->finalize (object);
 }
 
@@ -179,6 +224,28 @@ static void soup_brotli_decompressor_iface_init (GConverterIface *iface)
 {
 	iface->convert = soup_brotli_decompressor_convert;
 	iface->reset = soup_brotli_decompressor_reset;
+}
+
+/* The dictionary must be set before any data is decompressed (the message is
+ * paused until it is resolved), otherwise the framing header cannot be consumed. */
+static void
+soup_brotli_decompressor_set_dictionary (SoupCompressionDictionaryDecoder *decoder,
+                                         GBytes                           *dictionary)
+{
+	SoupBrotliDecompressor *self = SOUP_BROTLI_DECOMPRESSOR (decoder);
+
+	if (self->dictionary)
+		g_warning ("A compression dictionary was already set!");
+	if (self->state || self->header.consumed)
+		g_warning ("Decoding already started before the dictionary!");
+	g_clear_pointer (&self->dictionary, g_bytes_unref);
+	self->dictionary = g_bytes_ref (dictionary);
+}
+
+static void
+soup_brotli_decompressor_dictionary_decoder_init (SoupCompressionDictionaryDecoderInterface *iface)
+{
+	iface->set_dictionary = soup_brotli_decompressor_set_dictionary;
 }
 
 static void

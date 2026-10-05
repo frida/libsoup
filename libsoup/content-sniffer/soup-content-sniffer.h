@@ -6,7 +6,6 @@
 #pragma once
 
 #include "soup-types.h"
-#include "soup-message.h"
 #include "soup-message-body.h"
 
 G_BEGIN_DECLS

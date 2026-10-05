@@ -10,12 +10,22 @@
 
 G_BEGIN_DECLS
 
-void        soup_message_headers_append_untrusted_data  (SoupMessageHeaders *hdrs,
+#define MAX_HEADERS_BUFFER_SIZE 256 * 1024 /* 256K */
+
+#define MAX_RANGES 200
+
+typedef enum {
+        SOUP_HEADER_VALUE_UNTRUSTED,
+        SOUP_HEADER_VALUE_TRUSTED
+} SoupHeaderValueTrusted;
+
+gboolean    soup_message_headers_append_untrusted_data  (SoupMessageHeaders *hdrs,
                                                          const char         *name,
                                                          const char         *value);
-void        soup_message_headers_append_common          (SoupMessageHeaders *hdrs,
+gboolean    soup_message_headers_append_common          (SoupMessageHeaders *hdrs,
                                                          SoupHeaderName      name,
-                                                         const char         *value);
+                                                         const char         *value,
+                                                         SoupHeaderValueTrusted trusted_value);
 const char *soup_message_headers_get_one_common         (SoupMessageHeaders *hdrs,
                                                          SoupHeaderName      name);
 const char *soup_message_headers_get_list_common        (SoupMessageHeaders *hdrs,
@@ -24,12 +34,16 @@ void        soup_message_headers_remove_common          (SoupMessageHeaders *hdr
                                                          SoupHeaderName      name);
 void        soup_message_headers_replace_common         (SoupMessageHeaders *hdrs,
                                                          SoupHeaderName      name,
-                                                         const char         *value);
+                                                         const char         *value,
+                                                         SoupHeaderValueTrusted trusted_value);
 gboolean    soup_message_headers_header_contains_common (SoupMessageHeaders *hdrs,
                                                          SoupHeaderName      name,
                                                          const char         *token);
 gboolean    soup_message_headers_header_equals_common   (SoupMessageHeaders *hdrs,
                                                          SoupHeaderName      name,
                                                          const char         *value);
+void        soup_message_headers_set_content_range_unsatisfied
+                                                        (SoupMessageHeaders *hdrs,
+                                                         goffset             total_length);
 
 G_END_DECLS

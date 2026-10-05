@@ -81,6 +81,8 @@ soup_body_input_stream_constructed (GObject *object)
 	SoupBodyInputStream *bistream = SOUP_BODY_INPUT_STREAM (object);
         SoupBodyInputStreamPrivate *priv = soup_body_input_stream_get_instance_private (bistream);
 
+	G_OBJECT_CLASS (soup_body_input_stream_parent_class)->constructed (object);
+
 	priv->base_stream = g_filter_input_stream_get_base_stream (G_FILTER_INPUT_STREAM (bistream));
 
 	if (priv->encoding == SOUP_ENCODING_NONE ||
@@ -122,6 +124,9 @@ soup_body_input_stream_get_property (GObject *object, guint prop_id,
 	switch (prop_id) {
 	case PROP_ENCODING:
 		g_value_set_enum (value, priv->encoding);
+		break;
+	case PROP_CONTENT_LENGTH:
+		g_assert_not_reached ();
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -171,24 +176,71 @@ soup_body_input_stream_read_chunked (SoupBodyInputStream  *bistream,
 	SoupFilterInputStream *fstream = SOUP_FILTER_INPUT_STREAM (priv->base_stream);
 	char metabuf[128];
 	gssize nread;
+        guint64 chunk_size;
+        gchar *end;
+        char *boundary;
 	gboolean got_line;
 
 again:
 	switch (priv->chunked_state) {
 	case SOUP_BODY_INPUT_STREAM_STATE_CHUNK_SIZE:
-		nread = soup_filter_input_stream_read_line (
-			fstream, metabuf, sizeof (metabuf), blocking,
+		nread = soup_filter_input_stream_read_until (
+			fstream, metabuf, sizeof (metabuf),
+                        "\r\n", 2, blocking, TRUE,
 			&got_line, cancellable, error);
-		if (nread <= 0)
+		if (nread < 0)
 			return nread;
-		if (!got_line) {
-			g_set_error_literal (error, G_IO_ERROR,
-					     G_IO_ERROR_PARTIAL_INPUT,
-					     _("Connection terminated unexpectedly"));
+
+		if (nread == 0 || !got_line || nread < 3) {
+			if (error && *error == NULL) {
+				g_set_error_literal (error, G_IO_ERROR,
+						     G_IO_ERROR_PARTIAL_INPUT,
+						     _("Connection terminated unexpectedly"));
+			}
 			return -1;
 		}
 
-		priv->read_length = strtoul (metabuf, NULL, 16);
+                /* metabuf is not NUL-terminated by read_until(), so terminate
+                 * it at the trailing CRLF before scanning for chunk extensions. */
+                metabuf[nread - 2] = '\0';
+
+                /* ignore extensions */
+                boundary = memchr (metabuf, ';', nread);
+                if (boundary)
+                        *boundary = '\0';
+
+                /* RFC 9112 defines chunk-size as 1*HEXDIG. g_ascii_strtoull()
+                 * also skips leading whitespace and accepts a sign, which would
+                 * create a request-smuggling differential with strict
+                 * intermediaries, so require a leading hex digit. */
+                if (!g_ascii_isxdigit (metabuf[0])) {
+                        if (error && *error == NULL) {
+                                g_set_error_literal (error, G_IO_ERROR,
+                                                     G_IO_ERROR_INVALID_ARGUMENT,
+                                                     _("Invalid chunk size"));
+                        }
+                        return -1;
+                }
+
+                chunk_size = g_ascii_strtoull (metabuf, &end, 16);
+                if (*end) {
+                        if (error && *error == NULL) {
+                                g_set_error_literal (error, G_IO_ERROR,
+                                                     G_IO_ERROR_INVALID_ARGUMENT,
+                                                     _("Invalid chunk size"));
+                        }
+                        return -1;
+                }
+
+                if (chunk_size > G_MAXOFFSET) {
+                        if (error && *error == NULL) {
+                                g_set_error_literal (error, G_IO_ERROR,
+                                                     G_IO_ERROR_MESSAGE_TOO_LARGE,
+                                                     _("Too large chunk"));
+                        }
+                        return -1;
+                }
+                priv->read_length = (goffset)chunk_size;
 		if (priv->read_length > 0)
 			priv->chunked_state = SOUP_BODY_INPUT_STREAM_STATE_CHUNK;
 		else
@@ -208,16 +260,19 @@ again:
 		return nread;
 
 	case SOUP_BODY_INPUT_STREAM_STATE_CHUNK_END:
-		nread = soup_filter_input_stream_read_line (
+		nread = soup_filter_input_stream_read_until (
 			SOUP_FILTER_INPUT_STREAM (priv->base_stream),
-			metabuf, sizeof (metabuf), blocking,
+			metabuf, sizeof (metabuf),
+                        "\r\n", 2, blocking, TRUE,
 			&got_line, cancellable, error);
-		if (nread <= 0)
+		if (nread < 0)
 			return nread;
-		if (!got_line) {
-			g_set_error_literal (error, G_IO_ERROR,
-					     G_IO_ERROR_PARTIAL_INPUT,
-					     _("Connection terminated unexpectedly"));
+		if (nread == 0 || !got_line) {
+			if (error && *error == NULL) {
+				g_set_error_literal (error, G_IO_ERROR,
+						     G_IO_ERROR_PARTIAL_INPUT,
+						     _("Connection terminated unexpectedly"));
+			}
 			return -1;
 		}
 
@@ -225,13 +280,23 @@ again:
 		break;
 
 	case SOUP_BODY_INPUT_STREAM_STATE_TRAILERS:
-		nread = soup_filter_input_stream_read_line (
-			fstream, buffer, count, blocking,
+		nread = soup_filter_input_stream_read_until (
+			fstream, metabuf, sizeof (metabuf),
+                        "\r\n", 2, blocking, TRUE,
 			&got_line, cancellable, error);
-		if (nread <= 0)
+		if (nread < 0)
 			return nread;
 
-		if (strncmp (buffer, "\r\n", nread) || strncmp (buffer, "\n", nread)) {
+		if (nread == 0) {
+			if (error && *error == NULL) {
+				g_set_error_literal (error, G_IO_ERROR,
+						     G_IO_ERROR_PARTIAL_INPUT,
+						     _("Connection terminated unexpectedly"));
+			}
+			return -1;
+		}
+
+		if (nread == 2 && strncmp (metabuf, "\r\n", nread) == 0) {
 			priv->chunked_state = SOUP_BODY_INPUT_STREAM_STATE_DONE;
 			priv->eof = TRUE;
 		}
@@ -277,8 +342,13 @@ read_internal (GInputStream  *stream,
 
 		nread = soup_body_input_stream_read_raw (bistream, buffer, count,
 							 blocking, cancellable, error);
-		if (priv->read_length != -1 && nread > 0)
-			priv->read_length -= nread;
+		if (priv->read_length != -1 && nread > 0) {
+		        priv->read_length -= nread;
+
+		        if (priv->encoding == SOUP_ENCODING_CONTENT_LENGTH && priv->read_length == 0) {
+		                priv->eof = TRUE;
+		        }
+		}
 
 		if (priv->encoding == SOUP_ENCODING_CONTENT_LENGTH)
 			priv->pos += nread;

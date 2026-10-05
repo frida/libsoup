@@ -236,6 +236,66 @@ soup_uri_host_equal (gconstpointer v1, gconstpointer v2)
 	return g_ascii_strcasecmp (one_host, two_host) == 0;
 }
 
+static gboolean
+is_valid_character_for_host (char c)
+{
+        static const char forbidden_chars[] = { '\t', '\n', '\r', ' ', '#', '/', ':', '<', '>', '?', '@', '[', '\\', ']', '^', '|' };
+        int i;
+
+        for (i = 0; i < G_N_ELEMENTS (forbidden_chars); ++i) {
+                if (c == forbidden_chars[i])
+                        return FALSE;
+        }
+
+        return TRUE;
+}
+
+static gboolean
+is_host_valid (const char* host)
+{
+        int i;
+        gboolean is_valid;
+        char *ascii_host = NULL;
+
+        if (!host || !host[0])
+                return FALSE;
+
+        if (g_hostname_is_non_ascii (host)) {
+                ascii_host = g_hostname_to_ascii (host);
+                if (!ascii_host)
+                  return FALSE;
+
+                host = ascii_host;
+        }
+
+        if ((g_ascii_isdigit (host[0]) || strchr (host, ':')) && g_hostname_is_ip_address (host)) {
+                g_free (ascii_host);
+                return TRUE;
+        }
+
+        is_valid = TRUE;
+        for (i = 0; host[i] && is_valid; i++)
+                is_valid = is_valid_character_for_host (host[i]);
+
+        g_free (ascii_host);
+
+        return is_valid;
+}
+
+gboolean
+soup_uri_is_valid (GUri *uri)
+{
+        if (!uri)
+                return FALSE;
+
+        if (!is_host_valid (g_uri_get_host (uri)))
+                return FALSE;
+
+        /* FIXME: validate other URI components? */
+
+        return TRUE;
+}
+
 gboolean
 soup_uri_is_https (GUri *uri)
 {
@@ -301,8 +361,25 @@ soup_uri_decode_data_uri (const char *uri,
         if (content_type)
                 *content_type = NULL;
 
+#if !GLIB_CHECK_VERSION (2, 83, 1)
+        /* g_uri_to_string() is picky about paths that start with `//` and will assert, clean them up.
+         * https://gitlab.gnome.org/GNOME/glib/-/merge_requests/4407 */
+        const char *path = g_uri_get_path (soup_uri);
+        if (path[0] == '/' && path[1] == '/') {
+                char *new_path = g_strconcat ("/.", path, NULL);
+                GUri *new_uri = soup_uri_copy (soup_uri, SOUP_URI_PATH, new_path, SOUP_URI_NONE);
+
+                g_uri_unref (soup_uri);
+                g_free (new_path);
+
+                soup_uri = new_uri;
+        }
+#endif
+
         uri_string = g_uri_to_string (soup_uri);
         g_uri_unref (soup_uri);
+        if (!uri_string)
+                return NULL;
 
         start = uri_string + 5;
         comma = strchr (start, ',');
@@ -331,10 +408,14 @@ soup_uri_decode_data_uri (const char *uri,
                         if (g_bytes_get_size (bytes) <= 1)
                                 g_clear_pointer (&bytes, g_bytes_unref);
                         else {
-                                gsize content_length;
                                 GByteArray *unescaped_array = g_bytes_unref_to_array (bytes);
-                                g_base64_decode_inplace ((gchar*)unescaped_array->data, &content_length);
-                                unescaped_array->len = content_length;
+                                gint state = 0;
+                                guint save = 0;
+
+                                unescaped_array->len = g_base64_decode_step ((const gchar *)unescaped_array->data,
+                                                                             unescaped_array->len,
+                                                                             unescaped_array->data,
+                                                                             &state, &save);
                                 bytes = g_byte_array_free_to_bytes (unescaped_array);
                         }
                 }
@@ -363,6 +444,28 @@ soup_uri_decode_data_uri (const char *uri,
  * the URI that should be updated with the given values.
  */
 
+static int
+get_maybe_default_port (GUri *uri)
+{
+        const char *scheme = g_uri_get_scheme (uri);
+        int port = g_uri_get_port (uri);
+
+        switch (port) {
+        case 80:
+                if (!strcmp (scheme, "http") || !strcmp (scheme, "ws"))
+                        return -1;
+                break;
+        case 443:
+                if (!strcmp (scheme, "https") || !strcmp (scheme, "wss"))
+                        return -1;
+                break;
+        default:
+                break;
+        }
+
+        return port;
+}
+
 /**
  * soup_uri_copy: (skip)
  * @uri: the #GUri to copy
@@ -370,6 +473,11 @@ soup_uri_decode_data_uri (const char *uri,
  * @...: value of @first_component  followed by additional
  *    components and values, terminated by %SOUP_URI_NONE
  *
+ * As of 3.4.0 this will detect the default ports of HTTP(s) and WS(S)
+ * URIs when copying and set it to the default port of the new scheme.
+ * So for example copying `http://localhost:80` while changing the scheme to https
+ * will result in `https://localhost:443`.
+ * 
  * Return a copy of @uri with the given components updated.
  *
  * Returns: (transfer full): a new #GUri
@@ -392,7 +500,7 @@ soup_uri_copy (GUri            *uri,
         va_start (args, first_component);
         while (component != SOUP_URI_NONE) {
                 if (component == SOUP_URI_PORT)
-                        values[component] = GINT_TO_POINTER (va_arg (args, glong));
+                        values[component] = GINT_TO_POINTER (va_arg (args, gint));
                 else
                         values[component] = va_arg (args, gpointer);
                 values_to_set[component] = TRUE;
@@ -417,7 +525,7 @@ soup_uri_copy (GUri            *uri,
                 values_to_set[SOUP_URI_PASSWORD] ? values[SOUP_URI_PASSWORD] : g_uri_get_password (uri),
                 values_to_set[SOUP_URI_AUTH_PARAMS] ? values[SOUP_URI_AUTH_PARAMS] : g_uri_get_auth_params (uri),
                 values_to_set[SOUP_URI_HOST] ? values[SOUP_URI_HOST] : g_uri_get_host (uri),
-                values_to_set[SOUP_URI_PORT] ? GPOINTER_TO_INT (values[SOUP_URI_PORT]) : g_uri_get_port (uri),
+                values_to_set[SOUP_URI_PORT] ? GPOINTER_TO_INT (values[SOUP_URI_PORT]) : get_maybe_default_port (uri),
                 values_to_set[SOUP_URI_PATH] ? values[SOUP_URI_PATH] : g_uri_get_path (uri),
                 values_to_set[SOUP_URI_QUERY] ? values[SOUP_URI_QUERY] : g_uri_get_query (uri),
                 values_to_set[SOUP_URI_FRAGMENT] ? values[SOUP_URI_FRAGMENT] : g_uri_get_fragment (uri)

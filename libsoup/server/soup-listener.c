@@ -77,6 +77,8 @@ listen_watch (GObject      *pollable,
                 return G_SOURCE_REMOVE;
 
         conn = soup_server_connection_new (socket, priv->tls_certificate, priv->tls_database, priv->tls_auth_mode);
+        g_object_unref (socket);
+
         g_signal_emit (listener, signals[NEW_CONNECTION], 0, conn);
         g_object_unref (conn);
 
@@ -94,6 +96,7 @@ soup_listener_constructed (GObject *object)
         priv->conn = (GIOStream *)g_socket_connection_factory_create_connection (priv->socket);
         priv->iostream = soup_io_stream_new (priv->conn, FALSE);
         priv->source = g_pollable_input_stream_create_source (G_POLLABLE_INPUT_STREAM (g_io_stream_get_input_stream (priv->iostream)), NULL);
+        g_source_set_static_name (priv->source, "SoupListener");
         g_source_set_callback (priv->source, (GSourceFunc)listen_watch, listener, NULL);
         g_source_attach (priv->source, g_main_context_get_thread_default ());
 
@@ -113,6 +116,7 @@ soup_listener_finalize (GObject *object)
 
         g_clear_object (&priv->socket);
         g_clear_object (&priv->iostream);
+        g_clear_object (&priv->local_addr);
 
         g_clear_object (&priv->tls_certificate);
         g_clear_object (&priv->tls_database);

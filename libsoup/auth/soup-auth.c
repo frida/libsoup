@@ -26,7 +26,7 @@
  * but applications never need to be aware of the specific subclasses being
  * used.
  *
- * #SoupAuth objects store the authentication data associated with a given bit
+ * [class@Auth] objects store the authentication data associated with a given bit
  * of web space. They are created automatically by [class@Session].
  **/
 
@@ -101,6 +101,11 @@ soup_auth_set_property (GObject *object, guint prop_id,
 		break;
 	case PROP_IS_FOR_PROXY:
 		priv->proxy = g_value_get_boolean (value);
+		break;
+	case PROP_SCHEME_NAME:
+	case PROP_IS_AUTHENTICATED:
+	case PROP_IS_CANCELLED:
+		g_assert_not_reached ();
 		break;
 	default:
 		G_OBJECT_WARN_INVALID_PROPERTY_ID (object, prop_id, pspec);
@@ -237,17 +242,17 @@ soup_auth_class_init (SoupAuthClass *auth_class)
 
 /**
  * soup_auth_new: (constructor)
- * @type: the type of auth to create (a subtype of #SoupAuth)
+ * @type: the type of auth to create (a subtype of [class@Auth])
  * @msg: the #SoupMessage the auth is being created for
  * @auth_header: the WWW-Authenticate/Proxy-Authenticate header
  *
- * Creates a new #SoupAuth of type @type with the information from
+ * Creates a new [class@Auth] of type @type with the information from
  * @msg and @auth_header.
  *
  * This is called by [class@Session]; you will normally not create auths
  * yourself.
  *
- * Returns: (nullable): the new #SoupAuth, or %NULL if it could
+ * Returns: (nullable): the new [class@Auth], or %NULL if it could
  *   not be created
  **/
 SoupAuth *
@@ -289,8 +294,7 @@ soup_auth_new (GType type, SoupMessage *msg, const char *auth_header)
 	priv->realm = g_strdup (g_hash_table_lookup (params, "realm"));
 
 	if (!SOUP_AUTH_GET_CLASS (auth)->update (auth, msg, params)) {
-		g_object_unref (auth);
-		auth = NULL;
+		g_clear_object (&auth);
 	}
 	soup_header_free_param_list (params);
 	return auth;
@@ -308,7 +312,7 @@ soup_auth_new (GType type, SoupMessage *msg, const char *auth_header)
  * As with [ctor@Auth.new], this is normally only used by [class@Session].
  *
  * Returns: %TRUE if @auth is still a valid (but potentially
- *   unauthenticated) #SoupAuth. %FALSE if something about @auth_params
+ *   unauthenticated) [class@Auth]. %FALSE if something about @auth_params
  *   could not be parsed or incorporated into @auth at all.
  **/
 gboolean
@@ -387,7 +391,7 @@ soup_auth_authenticate (SoupAuth *auth, const char *username, const char *passwo
  *
  * You need to cancel an auth to complete an asynchronous authenticate operation
  * when no credentials are provided ([method@Auth.authenticate] is not called).
- * The #SoupAuth will be cancelled on dispose if it hans't been authenticated.
+ * The [class@Auth] will be cancelled on dispose if it hasn't been authenticated.
  */
 void
 soup_auth_cancel (SoupAuth *auth)
@@ -486,7 +490,7 @@ soup_auth_get_realm (SoupAuth *auth)
  *
  * Gets an opaque identifier for @auth.
  *
- * The identifier can be used as a hash key or the like. #SoupAuth objects from
+ * The identifier can be used as a hash key or the like. [class@Auth] objects from
  * the same server with the same identifier refer to the same authentication
  * domain (eg, the URLs associated with them take the same usernames and
  * passwords).
@@ -647,7 +651,7 @@ GSList *
 soup_auth_get_protection_space (SoupAuth *auth, GUri *source_uri)
 {
 	g_return_val_if_fail (SOUP_IS_AUTH (auth), NULL);
-        g_return_val_if_fail (SOUP_URI_IS_VALID (source_uri), NULL);
+        g_return_val_if_fail (soup_uri_is_valid (source_uri), NULL);
 
         GUri *source_uri_normalized = soup_uri_copy_with_normalized_flags (source_uri);
 	GSList *ret = SOUP_AUTH_GET_CLASS (auth)->get_protection_space (auth, source_uri_normalized);

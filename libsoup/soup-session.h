@@ -7,7 +7,6 @@
 
 #include "soup-types.h"
 #include "soup-message.h"
-#include "soup-session-feature.h"
 #include "soup-websocket-connection.h"
 
 G_BEGIN_DECLS
@@ -166,6 +165,29 @@ GBytes         *soup_session_send_and_read        (SoupSession          *session
 						   SoupMessage          *msg,
 						   GCancellable         *cancellable,
 						   GError              **error);
+
+SOUP_AVAILABLE_IN_3_4
+void            soup_session_send_and_splice_async(SoupSession          *session,
+                                                   SoupMessage          *msg,
+                                                   GOutputStream        *out_stream,
+                                                   GOutputStreamSpliceFlags flags,
+                                                   int                   io_priority,
+                                                   GCancellable         *cancellable,
+                                                   GAsyncReadyCallback   callback,
+                                                   gpointer              user_data);
+
+SOUP_AVAILABLE_IN_3_4
+gssize          soup_session_send_and_splice_finish(SoupSession         *session,
+                                                    GAsyncResult        *result,
+                                                    GError             **error);
+
+SOUP_AVAILABLE_IN_3_4
+gssize          soup_session_send_and_splice      (SoupSession         *session,
+                                                   SoupMessage         *msg,
+                                                   GOutputStream       *out_stream,
+                                                   GOutputStreamSpliceFlags flags,
+                                                   GCancellable        *cancellable,
+                                                   GError             **error);
 
 SOUP_AVAILABLE_IN_ALL
 SoupMessage    *soup_session_get_async_result_message (SoupSession  *session,

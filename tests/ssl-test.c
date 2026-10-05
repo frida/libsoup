@@ -258,7 +258,7 @@ set_certificate_idle_cb (SetCertificateAsyncData *data)
 {
         soup_message_set_tls_client_certificate (data->msg, data->certificate);
 
-        return FALSE;
+        return G_SOURCE_REMOVE;
 }
 
 static gboolean
@@ -285,7 +285,7 @@ set_certificate_password_idle_cb (SetCertificateAsyncData *data)
         g_tls_password_set_value (data->tls_password, data->password, -1);
         soup_message_tls_client_certificate_password_request_complete (data->msg);
 
-        return FALSE;
+        return G_SOURCE_REMOVE;
 }
 
 static gboolean
@@ -453,7 +453,7 @@ do_tls_interaction_msg_test (gconstpointer data)
         g_object_unref (msg);
 
         /* Currently on the gnutls backend supports pkcs#11 */
-        if (g_strcmp0 (g_type_name (G_TYPE_FROM_INSTANCE (g_tls_backend_get_default ())), "GTlsBackendGnutls") == 0) {
+        if (ENABLE_PKCS11_TESTS && g_strcmp0 (g_type_name (G_TYPE_FROM_INSTANCE (g_tls_backend_get_default ())), "GTlsBackendGnutls") == 0) {
                 g_test_message ("Running PKCS#11 tests");
 
                 /* Using PKCS#11 works, and asks for a PIN */
@@ -463,6 +463,7 @@ do_tls_interaction_msg_test (gconstpointer data)
                         &error
                 );
                 g_assert_no_error (error);
+                g_clear_error (&error);
                 g_assert_nonnull (pkcs11_certificate);
                 g_assert_true (G_IS_TLS_CERTIFICATE (pkcs11_certificate));
                 msg = soup_message_new_from_uri ("GET", uri);
@@ -509,7 +510,7 @@ do_tls_interaction_msg_test (gconstpointer data)
                 g_bytes_unref (body);
                 g_object_unref (msg);
 
-                g_object_unref (pkcs11_certificate);
+                g_clear_object (&pkcs11_certificate);
         }
 
         g_object_set (server, "tls-database", NULL, "tls-auth-mode", G_TLS_AUTHENTICATION_NONE, NULL);
@@ -649,7 +650,7 @@ do_tls_interaction_preconnect_test (gconstpointer data)
         soup_session_abort (session);
 
         /* Currently on the gnutls backend supports pkcs#11 */
-        if (g_strcmp0 (g_type_name (G_TYPE_FROM_INSTANCE (g_tls_backend_get_default ())), "GTlsBackendGnutls") == 0) {
+        if (ENABLE_PKCS11_TESTS && g_strcmp0 (g_type_name (G_TYPE_FROM_INSTANCE (g_tls_backend_get_default ())), "GTlsBackendGnutls") == 0) {
                 GTlsCertificate *pkcs11_certificate;
 
                 pkcs11_certificate = g_tls_certificate_new_from_pkcs11_uris (
@@ -733,12 +734,12 @@ main (int argc, char **argv)
 
 	test_init (argc, argv, NULL);
 
-#if HAVE_GNUTLS
+#if HAVE_GNUTLS && ENABLE_PKCS11_TESTS
         char *module_path = soup_test_build_filename_abs (G_TEST_BUILT, "mock-pkcs11.so", NULL);
         g_assert_true (g_file_test (module_path, G_FILE_TEST_EXISTS));
 
-        g_assert (gnutls_pkcs11_init (GNUTLS_PKCS11_FLAG_MANUAL, NULL) == GNUTLS_E_SUCCESS);
-        g_assert (gnutls_pkcs11_add_provider (module_path, NULL) == GNUTLS_E_SUCCESS);
+        g_assert_true (gnutls_pkcs11_init (GNUTLS_PKCS11_FLAG_MANUAL, NULL) == GNUTLS_E_SUCCESS);
+        g_assert_true (gnutls_pkcs11_add_provider (module_path, NULL) == GNUTLS_E_SUCCESS);
         g_free (module_path);
 #endif
 

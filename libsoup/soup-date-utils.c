@@ -40,7 +40,7 @@ soup_date_time_is_past (GDateTime *date)
         g_return_val_if_fail (date != NULL, TRUE);
 
 	/* optimization */
-	if (g_date_time_get_year (date) < 2020)
+	if (g_date_time_get_year (date) < 2025)
 		return TRUE;
 
 	return g_date_time_to_unix (date) < time (NULL);
@@ -95,6 +95,9 @@ soup_date_time_to_string (GDateTime      *date,
                 char *date_format;
                 char *formatted_date;
 
+                if (!utcdate)
+                        return NULL;
+
                 // We insert days/months ourselves to avoid locale specific formatting
                 if (format == SOUP_DATE_HTTP) {
 			/* "Sun, 06 Nov 1994 08:49:37 GMT" */
@@ -129,7 +132,7 @@ parse_day (int *day, const char **date_string)
 	while (*end == ' ' || *end == '-')
 		end++;
 	*date_string = end;
-	return TRUE;
+	return *day >= 1 && *day <= 31;
 }
 
 static inline gboolean
@@ -169,7 +172,7 @@ parse_year (int *year, const char **date_string)
 	while (*end == ' ' || *end == '-')
 		end++;
 	*date_string = end;
-	return TRUE;
+	return *year > 0 && *year < 9999;
 }
 
 static inline gboolean
@@ -193,7 +196,7 @@ parse_time (int *hour, int *minute, int *second, const char **date_string)
 	while (*p == ' ')
 		p++;
 	*date_string = p;
-	return TRUE;
+	return *hour >= 0 && *hour < 24 && *minute >= 0 && *minute < 60 && *second >= 0 && *second < 60;
 }
 
 static inline gboolean
@@ -209,20 +212,25 @@ parse_timezone (GTimeZone **timezone, const char **date_string)
 		gulong val;
 		int sign = (**date_string == '+') ? 1 : -1;
 		val = strtoul (*date_string + 1, (char **)date_string, 10);
-		if (**date_string == ':')
-			val = 60 * val + strtoul (*date_string + 1, (char **)date_string, 10);
-		else
+		if (val > 9999)
+			return FALSE;
+		if (**date_string == ':') {
+			gulong val2 = strtoul (*date_string + 1, (char **)date_string, 10);
+			if (val > 99 || val2 > 99)
+				return FALSE;
+			val = 60 * val + val2;
+		} else
 			val =  60 * (val / 100) + (val % 100);
 		offset_minutes = sign * val;
-                utc = (sign == -1) && !val;
+		utc = (sign == -1) && !val;
 	} else if (**date_string == 'Z') {
 		offset_minutes = 0;
-                utc = TRUE;
+		utc = TRUE;
 		(*date_string)++;
 	} else if (!strcmp (*date_string, "GMT") ||
 		   !strcmp (*date_string, "UTC")) {
 		offset_minutes = 0;
-                utc = TRUE;
+		utc = TRUE;
 		(*date_string) += 3;
 	} else if (strchr ("ECMP", **date_string) &&
 		   ((*date_string)[1] == 'D' || (*date_string)[1] == 'S') &&
@@ -264,7 +272,8 @@ parse_textual_date (const char *date_string)
 		if (!parse_month (&month, &date_string) ||
 		    !parse_day (&day, &date_string) ||
 		    !parse_time (&hour, &minute, &second, &date_string) ||
-		    !parse_year (&year, &date_string))
+		    !parse_year (&year, &date_string) ||
+		    !g_date_valid_dmy (day, month, year))
 			return NULL;
 
 		/* There shouldn't be a timezone, but check anyway */
@@ -276,7 +285,8 @@ parse_textual_date (const char *date_string)
 		if (!parse_day (&day, &date_string) ||
 		    !parse_month (&month, &date_string) ||
 		    !parse_year (&year, &date_string) ||
-		    !parse_time (&hour, &minute, &second, &date_string))
+		    !parse_time (&hour, &minute, &second, &date_string) ||
+		    !g_date_valid_dmy (day, month, year))
 			return NULL;
 
 		/* This time there *should* be a timezone, but we
@@ -324,6 +334,7 @@ soup_date_time_new_from_http_string (const char *date_string)
          * catch those in case for testing.
          */
 	if (G_UNLIKELY (g_ascii_isdigit (*date_string) && !strpbrk (date_string, "JFMASOND"))) {
+                g_debug ("Unsupported format passed to soup_date_time_new_from_http_string(): %s", date_string);
                 return NULL;
         }
 

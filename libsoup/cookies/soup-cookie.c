@@ -56,6 +56,7 @@ struct _SoupCookie {
 	GDateTime *expires;
 	gboolean   secure;
 	gboolean   http_only;
+	SoupSameSitePolicy same_site_policy;
 };
 
 G_DEFINE_BOXED_TYPE (SoupCookie, soup_cookie, soup_cookie_copy, soup_cookie_free)
@@ -81,7 +82,7 @@ soup_cookie_copy (SoupCookie *cookie)
 		copy->expires = g_date_time_ref (cookie->expires);
 	copy->secure = cookie->secure;
 	copy->http_only = cookie->http_only;
-	soup_cookie_set_same_site_policy (copy, soup_cookie_get_same_site_policy (cookie));
+	copy->same_site_policy = cookie->same_site_policy;
 
 	return copy;
 }
@@ -107,10 +108,16 @@ soup_cookie_domain_matches (SoupCookie *cookie, const char *host)
 	return soup_host_matches_host (cookie->domain, host);
 }
 
+static inline gboolean
+is_white_space (char c)
+{
+	return (c == ' ' || c == '\t');
+}
+
 static inline const char *
 skip_lws (const char *s)
 {
-	while (g_ascii_isspace (*s))
+	while (is_white_space (*s))
 		s++;
 	return s;
 }
@@ -118,13 +125,13 @@ skip_lws (const char *s)
 static inline const char *
 unskip_lws (const char *s, const char *start)
 {
-	while (s > start && g_ascii_isspace (*(s - 1)))
+	while (s > start && is_white_space (*(s - 1)))
 		s--;
 	return s;
 }
 
-#define is_attr_ender(ch) ((ch) < ' ' || (ch) == ';' || (ch) == ',' || (ch) == '=')
-#define is_value_ender(ch) ((ch) < ' ' || (ch) == ';')
+#define is_attr_ender(ch) ((ch) == '\0' || (ch) == ';' || (ch) == ',' || (ch) == '=')
+#define is_value_ender(ch) ((ch) == '\0' || (ch) == ';')
 
 static char *
 parse_value (const char **val_p, gboolean copy)
@@ -161,6 +168,9 @@ parse_date (const char **val_p)
 	return date;
 }
 
+#define MAX_AGE_CAP_IN_SECONDS 31536000  // 1 year
+#define MAX_ATTRIBUTE_SIZE 1024
+
 static SoupCookie *
 parse_one_cookie (const char *header, GUri *origin)
 {
@@ -169,6 +179,7 @@ parse_one_cookie (const char *header, GUri *origin)
 	SoupCookie *cookie;
 
 	cookie = g_slice_new0 (SoupCookie);
+	soup_cookie_set_same_site_policy (cookie, SOUP_SAME_SITE_POLICY_LAX);
 
 	/* Parse the NAME */
 	start = skip_lws (header);
@@ -188,6 +199,16 @@ parse_one_cookie (const char *header, GUri *origin)
 	/* Parse the VALUE */
 	cookie->value = parse_value (&p, TRUE);
 
+        if (!*cookie->name && !*cookie->value) {
+            soup_cookie_free (cookie);
+            return NULL;
+        }
+
+	if (strlen (cookie->name) + strlen (cookie->value) > 4096) {
+		soup_cookie_free (cookie);
+		return NULL;
+	}
+
 	/* Parse attributes */
 	while (*p == ';') {
 		start = skip_lws (p + 1);
@@ -199,12 +220,18 @@ parse_one_cookie (const char *header, GUri *origin)
 #define MATCH_NAME(name) ((end - start == strlen (name)) && !g_ascii_strncasecmp (start, name, end - start))
 
 		if (MATCH_NAME ("domain") && has_value) {
-			cookie->domain = parse_value (&p, TRUE);
+                        char *new_domain = parse_value (&p, TRUE);
+                        if (strlen (new_domain) > MAX_ATTRIBUTE_SIZE) {
+                            g_free (new_domain);
+                            continue;
+                        }
+			g_free (cookie->domain);
+			cookie->domain = g_steal_pointer (&new_domain);
 			if (!*cookie->domain) {
-				g_free (cookie->domain);
-				cookie->domain = NULL;
+				g_clear_pointer (&cookie->domain, g_free);
 			}
 		} else if (MATCH_NAME ("expires") && has_value) {
+			g_clear_pointer (&cookie->expires, g_date_time_unref);
 			cookie->expires = parse_date (&p);
 		} else if (MATCH_NAME ("httponly")) {
 			cookie->http_only = TRUE;
@@ -212,18 +239,29 @@ parse_one_cookie (const char *header, GUri *origin)
 				parse_value (&p, FALSE);
 		} else if (MATCH_NAME ("max-age") && has_value) {
 			char *max_age_str = parse_value (&p, TRUE), *mae;
+                        if (strlen (max_age_str) > MAX_ATTRIBUTE_SIZE) {
+                            g_free (max_age_str);
+                            continue;
+                        }
 			long max_age = strtol (max_age_str, &mae, 10);
 			if (!*mae) {
 				if (max_age < 0)
 					max_age = 0;
+				if (max_age > MAX_AGE_CAP_IN_SECONDS)
+					max_age = MAX_AGE_CAP_IN_SECONDS;
 				soup_cookie_set_max_age (cookie, max_age);
 			}
 			g_free (max_age_str);
 		} else if (MATCH_NAME ("path") && has_value) {
-			cookie->path = parse_value (&p, TRUE);
+                        char *new_path = parse_value (&p, TRUE);
+                        if (strlen (new_path) > MAX_ATTRIBUTE_SIZE) {
+                            g_free (new_path);
+                            continue;
+                        }
+			g_free (cookie->path);
+			cookie->path = g_steal_pointer (&new_path);
 			if (*cookie->path != '/') {
-				g_free (cookie->path);
-				cookie->path = NULL;
+				g_clear_pointer (&cookie->path, g_free);
 			}
 		} else if (MATCH_NAME ("secure")) {
 			cookie->secure = TRUE;
@@ -232,15 +270,15 @@ parse_one_cookie (const char *header, GUri *origin)
 		} else if (MATCH_NAME ("samesite")) {
 			if (has_value) {
 				char *policy = parse_value (&p, TRUE);
-				if (g_ascii_strcasecmp (policy, "Lax") == 0)
-					soup_cookie_set_same_site_policy (cookie, SOUP_SAME_SITE_POLICY_LAX);
+				if (g_ascii_strcasecmp (policy, "None") == 0)
+					soup_cookie_set_same_site_policy (cookie, SOUP_SAME_SITE_POLICY_NONE);
 				else if (g_ascii_strcasecmp (policy, "Strict") == 0)
 					soup_cookie_set_same_site_policy (cookie, SOUP_SAME_SITE_POLICY_STRICT);
-				/* There is an explicit "None" value which is the default. */
+				/* There is an explicit "Lax" value which is the default */
 				g_free (policy);
 			}
 			/* Note that earlier versions of the same-site RFC treated invalid values as strict but
-			   the latest revision simply ignores them. */
+			   the latest revision assigns invalid SameSite values to Lax. */
 		} else {
 			/* Ignore unknown attributes, but we still have
 			 * to skip over the value.
@@ -327,6 +365,7 @@ cookie_new_internal (const char *name, const char *value,
 	cookie->domain = g_strdup (domain);
 	cookie->path = g_strdup (path);
 	soup_cookie_set_max_age (cookie, max_age);
+	cookie->same_site_policy = SOUP_SAME_SITE_POLICY_LAX;
 
 	return cookie;
 }
@@ -339,7 +378,7 @@ cookie_new_internal (const char *name, const char *value,
  * @path: cookie path, or %NULL
  * @max_age: max age of the cookie, or -1 for a session cookie
  *
- * Creates a new #SoupCookie with the given attributes.
+ * Creates a new [struct@Cookie] with the given attributes.
  *
  * Use [method@Cookie.set_secure] and [method@Cookie.set_http_only] if you
  * need to set those attributes on the returned cookie.
@@ -357,6 +396,9 @@ cookie_new_internal (const char *name, const char *value,
  * multiples thereof) to calculate this value. (If you really care
  * about setting the exact time that the cookie will expire, use
  * [method@Cookie.set_expires].)
+ *
+ * As of version 3.4.0 the default value of a cookie's same-site-policy
+ * is %SOUP_SAME_SITE_POLICY_LAX.
  *
  * Returns: a new #SoupCookie.
  **/
@@ -385,16 +427,19 @@ soup_cookie_new (const char *name, const char *value,
  * @header: a cookie string (eg, the value of a Set-Cookie header)
  * @origin: (nullable): origin of the cookie
  *
- * Parses @header and returns a #SoupCookie.
+ * Parses @header and returns a [struct@Cookie].
  *
  * If @header contains multiple cookies, only the first one will be parsed.
  *
  * If @header does not have "path" or "domain" attributes, they will
  * be defaulted from @origin. If @origin is %NULL, path will default
  * to "/", but domain will be left as %NULL. Note that this is not a
- * valid state for a #SoupCookie, and you will need to fill in some
+ * valid state for a [struct@Cookie], and you will need to fill in some
  * appropriate string for the domain if you want to actually make use
  * of the cookie.
+ *
+ * As of version 3.4.0 the default value of a cookie's same-site-policy
+ * is %SOUP_SAME_SITE_POLICY_LAX.
  *
  * Returns: (nullable): a new #SoupCookie, or %NULL if it could
  *   not be parsed, or contained an illegal "domain" attribute for a
@@ -566,21 +611,21 @@ soup_cookie_set_max_age (SoupCookie *cookie, int max_age)
  * For use with [ctor@Cookie.new] and [method@Cookie.set_max_age].
  **/
 /**
- * SOUP_COOKIE_MAX_AGE_ONE_DAY:
+ * SOUP_COOKIE_MAX_AGE_ONE_DAY: (value 86400):
  *
  * A constant corresponding to 1 day.
  *
  * For use with [ctor@Cookie.new] and [method@Cookie.set_max_age].
  **/
 /**
- * SOUP_COOKIE_MAX_AGE_ONE_WEEK:
+ * SOUP_COOKIE_MAX_AGE_ONE_WEEK: (value 604800):
  *
  * A constant corresponding to 1 week.
  *
  * For use with [ctor@Cookie.new] and [method@Cookie.set_max_age].
  **/
 /**
- * SOUP_COOKIE_MAX_AGE_ONE_YEAR:
+ * SOUP_COOKIE_MAX_AGE_ONE_YEAR: (value 31556926.08):
  *
  * A constant corresponding to 1 year.
  *
@@ -711,12 +756,13 @@ serialize_cookie (SoupCookie *cookie, GString *header, gboolean set_cookie)
 
 	if (cookie->expires) {
 		char *timestamp;
-
-		g_string_append (header, "; expires=");
 		timestamp = soup_date_time_to_string (cookie->expires,
 						      SOUP_DATE_COOKIE);
-		g_string_append (header, timestamp);
-		g_free (timestamp);
+                if (timestamp) {
+                        g_string_append (header, "; expires=");
+                        g_string_append (header, timestamp);
+                        g_free (timestamp);
+                }
 	}
 	if (cookie->path) {
 		g_string_append (header, "; path=");
@@ -741,10 +787,6 @@ serialize_cookie (SoupCookie *cookie, GString *header, gboolean set_cookie)
 		g_string_append (header, "; HttpOnly");
 }
 
-static GQuark soup_same_site_policy_quark (void);
-G_DEFINE_QUARK (soup-same-site-policy, soup_same_site_policy)
-#define SAME_SITE_POLICY_QUARK (soup_same_site_policy_quark())
-
 /**
  * soup_cookie_set_same_site_policy:
  * @cookie: a #SoupCookie
@@ -762,7 +804,7 @@ soup_cookie_set_same_site_policy (SoupCookie         *cookie,
 	case SOUP_SAME_SITE_POLICY_NONE:
 	case SOUP_SAME_SITE_POLICY_STRICT:
 	case SOUP_SAME_SITE_POLICY_LAX:
-		g_dataset_id_set_data (cookie, SAME_SITE_POLICY_QUARK, GUINT_TO_POINTER (policy));
+                cookie->same_site_policy = policy;
 		break;
 	default:
 		g_return_if_reached ();
@@ -780,7 +822,7 @@ soup_cookie_set_same_site_policy (SoupCookie         *cookie,
 SoupSameSitePolicy
 soup_cookie_get_same_site_policy (SoupCookie *cookie)
 {
-	return GPOINTER_TO_UINT (g_dataset_id_get_data (cookie, SAME_SITE_POLICY_QUARK));
+        return cookie->same_site_policy;
 }
 
 /**
@@ -889,7 +931,7 @@ soup_cookies_from_response (SoupMessage *msg)
  * `SoupCookie`s.
  *
  * As the "Cookie" header, unlike "Set-Cookie", only contains cookie names and
- * values, none of the other #SoupCookie fields will be filled in. (Thus, you
+ * values, none of the other [struct@Cookie] fields will be filled in. (Thus, you
  * can't generally pass a cookie returned from this method directly to
  * [func@cookies_to_response].)
  *
@@ -926,7 +968,7 @@ soup_cookies_from_request (SoupMessage *msg)
 
 /**
  * soup_cookies_to_response:
- * @cookies: (element-type SoupCookie): a #GSList of #SoupCookie
+ * @cookies: (element-type SoupCookie): a #GSList of [struct@Cookie]
  * @msg: a #SoupMessage
  *
  * Appends a "Set-Cookie" response header to @msg for each cookie in
@@ -944,7 +986,8 @@ soup_cookies_to_response (GSList *cookies, SoupMessage *msg)
 	while (cookies) {
 		serialize_cookie (cookies->data, header, TRUE);
 		soup_message_headers_append_common (soup_message_get_response_headers (msg),
-                                                    SOUP_HEADER_SET_COOKIE, header->str);
+                                                    SOUP_HEADER_SET_COOKIE, header->str,
+                                                    SOUP_HEADER_VALUE_TRUSTED);
 		g_string_truncate (header, 0);
 		cookies = cookies->next;
 	}
@@ -953,7 +996,7 @@ soup_cookies_to_response (GSList *cookies, SoupMessage *msg)
 
 /**
  * soup_cookies_to_request:
- * @cookies: (element-type SoupCookie): a #GSList of #SoupCookie
+ * @cookies: (element-type SoupCookie): a #GSList of [struct@Cookie]
  * @msg: a #SoupMessage
  *
  * Adds the name and value of each cookie in @cookies to @msg's
@@ -975,13 +1018,14 @@ soup_cookies_to_request (GSList *cookies, SoupMessage *msg)
 		cookies = cookies->next;
 	}
 	soup_message_headers_replace_common (soup_message_get_request_headers (msg),
-                                             SOUP_HEADER_COOKIE, header->str);
+                                             SOUP_HEADER_COOKIE, header->str,
+                                             SOUP_HEADER_VALUE_TRUSTED);
 	g_string_free (header, TRUE);
 }
 
 /**
  * soup_cookies_free: (skip)
- * @cookies: (element-type SoupCookie): a #GSList of #SoupCookie
+ * @cookies: (element-type SoupCookie): a #GSList of [struct@Cookie]
  *
  * Frees @cookies.
  **/
@@ -993,9 +1037,9 @@ soup_cookies_free (GSList *cookies)
 
 /**
  * soup_cookies_to_cookie_header:
- * @cookies: (element-type SoupCookie): a #GSList of #SoupCookie
+ * @cookies: (element-type SoupCookie): a #GSList of [struct@Cookie]
  *
- * Serializes a [struct@GLib.SList] of #SoupCookie into a string suitable for
+ * Serializes a [struct@GLib.SList] of [struct@Cookie] into a string suitable for
  * setting as the value of the "Cookie" header.
  *
  * Returns: the serialization of @cookies
@@ -1080,5 +1124,5 @@ soup_cookie_equal (SoupCookie *cookie1, SoupCookie *cookie2)
 
 	return (!strcmp (cookie1->name, cookie2->name) &&
 		!strcmp (cookie1->value, cookie2->value) &&
-		!strcmp (cookie1->path, cookie2->path));
+		!g_strcmp0 (cookie1->path, cookie2->path));
 }

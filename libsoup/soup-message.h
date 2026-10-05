@@ -8,7 +8,6 @@
 #include "soup-types.h"
 #include "soup-message-body.h"
 #include "soup-message-headers.h"
-#include "soup-message-metrics.h"
 #include "soup-method.h"
 #include "soup-multipart.h"
 
@@ -196,5 +195,21 @@ GSocketAddress     *soup_message_get_remote_address   (SoupMessage *msg);
 SOUP_AVAILABLE_IN_ALL
 SoupMessageMetrics *soup_message_get_metrics          (SoupMessage  *msg);
 
+SOUP_AVAILABLE_IN_3_4
+void                soup_message_set_force_http1      (SoupMessage *msg,
+                                                       gboolean value);
+SOUP_AVAILABLE_IN_3_4
+gboolean            soup_message_get_force_http1      (SoupMessage *msg);
+
+SOUP_AVAILABLE_IN_3_8
+void                soup_message_set_compression_dictionary_hash (SoupMessage *msg,
+                                                                  GBytes      *hash);
+SOUP_AVAILABLE_IN_3_8
+GBytes             *soup_message_get_compression_dictionary_hash (SoupMessage *msg);
+SOUP_AVAILABLE_IN_3_8
+void                soup_message_set_compression_dictionary_id   (SoupMessage *msg,
+                                                                  const char  *id);
+SOUP_AVAILABLE_IN_3_8
+const char         *soup_message_get_compression_dictionary_id   (SoupMessage *msg);
 
 G_END_DECLS

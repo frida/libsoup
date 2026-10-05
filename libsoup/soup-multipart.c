@@ -25,12 +25,12 @@
  * Of particular interest to HTTP are `multipart/byte-ranges` and
  * `multipart/form-data`,
  *
- * Although the headers of a #SoupMultipart body part will contain the
+ * Although the headers of a [struct@Multipart] body part will contain the
  * full headers from that body part, libsoup does not interpret them
  * according to MIME rules. For example, each body part is assumed to
  * have "binary" Content-Transfer-Encoding, even if its headers
  * explicitly state otherwise. In other words, don't try to use
- * #SoupMultipart for handling real MIME multiparts.
+ * [struct@Multipart] for handling real MIME multiparts.
  *
  **/
 
@@ -73,7 +73,7 @@ generate_boundary (void)
  * soup_multipart_new:
  * @mime_type: the MIME type of the multipart to create.
  *
- * Creates a new empty #SoupMultipart with a randomly-generated
+ * Creates a new empty [struct@Multipart] with a randomly-generated
  * boundary string.
  *
  * Note that @mime_type must be the full MIME type, including "multipart/".
@@ -104,7 +104,7 @@ find_boundary (const char *start, const char *end,
 			continue;
 
 		/* Check that it's at start of line */
-		if (!(b == start || (b[-1] == '\n' && b[-2] == '\r')))
+		if (!(b == start || (b - start >= 2 && b[-1] == '\n' && b[-2] == '\r')))
 			continue;
 
 		/* Check for "--" or "\r\n" after boundary */
@@ -120,7 +120,7 @@ find_boundary (const char *start, const char *end,
  * @headers: the headers of the HTTP message to parse
  * @body: the body of the HTTP message to parse
  *
- * Parses @headers and @body to form a new #SoupMultipart
+ * Parses @headers and @body to form a new [struct@Multipart]
  *
  * Returns: (nullable): a new #SoupMultipart (or %NULL if the
  *   message couldn't be parsed or wasn't multipart).
@@ -173,7 +173,7 @@ soup_multipart_new_from_message (SoupMessageHeaders *headers,
 			return NULL;
 		}
 
-		split = strstr (start, "\r\n\r\n");
+		split = g_strstr_len (start, body_end - start, "\r\n\r\n");
 		if (!split || split > end) {
 			soup_multipart_free (multipart);
 			return NULL;
@@ -204,7 +204,7 @@ soup_multipart_new_from_message (SoupMessageHeaders *headers,
 		 */
 		part_body = g_bytes_new_from_bytes (body, // FIXME
 						    split - body_data,
-						    end - 2 - split);
+						    end - 2 >= split ? end - 2 - split : 0);
 		g_ptr_array_add (multipart->bodies, part_body);
 
 		start = end;
@@ -330,8 +330,8 @@ soup_multipart_append_form_string (SoupMultipart *multipart,
  * soup_multipart_append_form_file:
  * @multipart: a multipart (presumably of type "multipart/form-data")
  * @control_name: the name of the control associated with this file
- * @filename: the name of the file, or %NULL if not known
- * @content_type: the MIME type of the file, or %NULL if not known
+ * @filename: (nullable): the name of the file, or %NULL if not known
+ * @content_type: (nullable): the MIME type of the file, or %NULL if not known
  * @body: the file data
  *
  * Adds a new MIME part containing @body to @multipart
@@ -354,12 +354,12 @@ soup_multipart_append_form_file (SoupMultipart *multipart,
 		soup_header_g_string_append_param_quoted (disposition, "filename", filename);
 	}
 	soup_message_headers_append_common (headers, SOUP_HEADER_CONTENT_DISPOSITION,
-                                            disposition->str);
+                                            disposition->str, SOUP_HEADER_VALUE_UNTRUSTED);
 	g_string_free (disposition, TRUE);
 
 	if (content_type) {
 		soup_message_headers_append_common (headers, SOUP_HEADER_CONTENT_TYPE,
-                                                    content_type);
+                                                    content_type, SOUP_HEADER_VALUE_UNTRUSTED);
 	}
 
 	g_ptr_array_add (multipart->headers, headers);

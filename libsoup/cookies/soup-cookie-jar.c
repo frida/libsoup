@@ -21,16 +21,25 @@
 #include "soup-uri-utils-private.h"
 
 /**
+ * SoupCookieJarError:
+ * @SOUP_COOKIE_JAR_ERROR_DB: an error from a database operation
+
+ *
+ * A [class@SoupCookieJar] error.
+ */
+G_DEFINE_QUARK (soup-cookie-jar-error-quark, soup_cookie_jar_error)
+
+/**
  * SoupCookieJar:
  *
  * Automatic cookie handling for SoupSession.
  *
- * A #SoupCookieJar stores [struct@Cookie]s and arrange for them to be sent with
- * the appropriate [class@Message]s. #SoupCookieJar implements
+ * A [class@CookieJar] stores [struct@Cookie]s and arrange for them to be sent with
+ * the appropriate [class@Message]s. [class@CookieJar] implements
  * [iface@SessionFeature], so you can add a cookie jar to a session with
  * [method@Session.add_feature] or [method@Session.add_feature_by_type].
  *
- * Note that the base #SoupCookieJar class does not support any form
+ * Note that the base [class@CookieJar] class does not support any form
  * of long-term cookie persistence.
  **/
 
@@ -85,6 +94,8 @@ soup_cookie_jar_constructed (GObject *object)
 {
 	SoupCookieJarPrivate *priv =
 		soup_cookie_jar_get_instance_private (SOUP_COOKIE_JAR (object));
+
+	G_OBJECT_CLASS (soup_cookie_jar_parent_class)->constructed (object);
 
 	priv->constructed = TRUE;
 }
@@ -168,8 +179,8 @@ soup_cookie_jar_class_init (SoupCookieJarClass *jar_class)
 	/**
 	 * SoupCookieJar::changed:
 	 * @jar: the #SoupCookieJar
-	 * @old_cookie: the old #SoupCookie value
-	 * @new_cookie: the new #SoupCookie value
+	 * @old_cookie: (nullable): the old #SoupCookie value
+	 * @new_cookie: (nullable): the new #SoupCookie value
 	 *
 	 * Emitted when @jar changes.
 	 *
@@ -225,9 +236,9 @@ soup_cookie_jar_class_init (SoupCookieJarClass *jar_class)
 /**
  * soup_cookie_jar_new:
  *
- * Creates a new #SoupCookieJar.
+ * Creates a new [class@CookieJar].
  *
- * The base #SoupCookieJar class does not support persistent storage of cookies;
+ * The base [class@CookieJar] class does not support persistent storage of cookies;
  * use a subclass for that.
  *
  * Returns: a new #SoupCookieJar
@@ -304,10 +315,10 @@ cookie_is_valid_for_same_site_policy (SoupCookie *cookie,
 	    (is_safe_method || for_http == FALSE))
 		return TRUE;
 
-	if (is_top_level_navigation && cookie_uri == NULL)
+	if (cookie_uri == NULL)
 		return FALSE;
 
-	return soup_host_matches_host (g_uri_get_host (cookie_uri ? cookie_uri : top_level), g_uri_get_host (uri));
+	return !g_ascii_strcasecmp (g_uri_get_host (cookie_uri), g_uri_get_host (uri));
 }
 
 static GSList *
@@ -401,7 +412,7 @@ get_cookies (SoupCookieJar *jar,
  * If @for_http is %TRUE, the return value will include cookies marked
  * "HttpOnly" (that is, cookies that the server wishes to keep hidden
  * from client-side scripting operations such as the JavaScript
- * document.cookies property). Since #SoupCookieJar sets the Cookie
+ * document.cookies property). Since [class@CookieJar] sets the Cookie
  * header itself when making the actual HTTP request, you should
  * almost certainly be setting @for_http to %FALSE if you are calling
  * this.
@@ -425,8 +436,7 @@ soup_cookie_jar_get_cookies (SoupCookieJar *jar, GUri *uri,
 		g_slist_free (cookies);
 
 		if (!*result) {
-			g_free (result);
-			result = NULL;
+			g_clear_pointer (&result, g_free);
 		}
 		return result;
 	} else
@@ -441,12 +451,12 @@ soup_cookie_jar_get_cookies (SoupCookieJar *jar, GUri *uri,
  *   to an HTTP operation
  *
  * Retrieves the list of cookies that would be sent with a request to @uri
- * as a [struct@GLib.List] of #SoupCookie objects.
+ * as a [struct@GLib.List] of [struct@Cookie] objects.
  *
  * If @for_http is %TRUE, the return value will include cookies marked
  * "HttpOnly" (that is, cookies that the server wishes to keep hidden
  * from client-side scripting operations such as the JavaScript
- * document.cookies property). Since #SoupCookieJar sets the Cookie
+ * document.cookies property). Since [class@CookieJar] sets the Cookie
  * header itself when making the actual HTTP request, you should
  * almost certainly be setting @for_http to %FALSE if you are calling
  * this.
@@ -564,6 +574,21 @@ incoming_cookie_is_third_party (SoupCookieJar            *jar,
         return retval;
 }
 
+static gboolean
+string_contains_ctrlcode (const char *s)
+{
+	const char *p;
+
+	p = s;
+	while (*p != '\0') {
+		if (g_ascii_iscntrl (*p) && *p != 0x09)
+			return TRUE;
+		
+		p++;
+	}
+	return FALSE;
+}
+
 /**
  * soup_cookie_jar_add_cookie_full:
  * @jar: a #SoupCookieJar
@@ -618,6 +643,54 @@ soup_cookie_jar_add_cookie_full (SoupCookieJar *jar, SoupCookie *cookie, GUri *u
 		return;
 	}
 
+	/* SameSite=None cookies are rejected unless the Secure attribute is set. */
+	if (soup_cookie_get_same_site_policy (cookie) == SOUP_SAME_SITE_POLICY_NONE && !soup_cookie_get_secure (cookie)) {
+		soup_cookie_free (cookie);
+		return;
+	}
+
+        /* See https://datatracker.ietf.org/doc/html/draft-ietf-httpbis-cookie-prefixes-00 for handling the prefixes,
+         * which has been implemented by Firefox and Chrome. */
+#define MATCH_PREFIX(name, prefix) (!g_ascii_strncasecmp (name, prefix, strlen(prefix)))
+
+        const char *name = soup_cookie_get_name (cookie);
+        const char *value = soup_cookie_get_value (cookie);
+
+	/* Cookies with a "__Secure-" prefix should have Secure attribute set and it must be for a secure host. */
+	if (MATCH_PREFIX (name, "__Secure-") && !soup_cookie_get_secure (cookie) ) {
+		soup_cookie_free (cookie);
+		return;
+	}
+        /* Path=/ and Secure attributes are required; Domain attribute must not be present.
+         Note that SoupCookie always sets the domain so we ensure its not a subdomain match. */
+	if (MATCH_PREFIX (name, "__Host-")) {
+		if (!soup_cookie_get_secure (cookie) ||
+		    strcmp (soup_cookie_get_path (cookie), "/") != 0 ||
+                    soup_cookie_get_domain (cookie)[0] == '.') {
+			soup_cookie_free (cookie);
+			return;
+		}
+	}
+
+        /* Cookie with an empty name impersonating a prefixed name. */
+        if (!*name && (MATCH_PREFIX (value, "__Secure-") || MATCH_PREFIX (value, "__Host-"))) {
+                soup_cookie_free (cookie);
+                return;
+        }
+
+	/* Cookies should not take control characters %x00-1F / %x7F (defined by RFC 5234) in names or values,
+	 * with the exception of %x09 (the tab character).
+	 */
+	if (string_contains_ctrlcode (name) || string_contains_ctrlcode (value)) {
+		soup_cookie_free (cookie);
+		return;
+	}
+	
+	if (strlen(name) > 4096 || strlen(value) > 4096) {
+		soup_cookie_free (cookie);
+		return;
+	}
+	
         g_mutex_lock (&priv->mutex);
 
 	old_cookies = g_hash_table_lookup (priv->domains, soup_cookie_get_domain (cookie));
@@ -822,21 +895,31 @@ process_set_cookie_header (SoupMessage *msg, gpointer user_data)
 	g_slist_free (new_cookies);
 }
 
+static gboolean
+allow_cookies_for_request (SoupMessage *msg)
+{
+        /* Do not send cookies to a HTTP proxy for a HTTPS request */
+        return soup_message_get_method (msg) != SOUP_METHOD_CONNECT || !soup_connection_is_tunnelled (soup_message_get_connection (msg));
+}
+
 static void
 msg_starting_cb (SoupMessage *msg, gpointer feature)
 {
 	SoupCookieJar *jar = SOUP_COOKIE_JAR (feature);
-	GSList *cookies;
+	GSList *cookies = NULL;
 
-	cookies = soup_cookie_jar_get_cookie_list_with_same_site_info (jar, soup_message_get_uri (msg),
-	                                                               soup_message_get_first_party (msg),
-							               soup_message_get_site_for_cookies (msg),
-								       TRUE,
-							               SOUP_METHOD_IS_SAFE (soup_message_get_method (msg)),
-							               soup_message_get_is_top_level_navigation (msg));
+        if (allow_cookies_for_request (msg)) {
+                cookies = soup_cookie_jar_get_cookie_list_with_same_site_info (jar, soup_message_get_uri (msg),
+                                                                               soup_message_get_first_party (msg),
+                                                                               soup_message_get_site_for_cookies (msg),
+                                                                               TRUE,
+                                                                               SOUP_METHOD_IS_SAFE (soup_message_get_method (msg)),
+                                                                               soup_message_get_is_top_level_navigation (msg));
+        }
+
 	if (cookies != NULL) {
 		char *cookie_header = soup_cookies_to_cookie_header (cookies);
-		soup_message_headers_replace_common (soup_message_get_request_headers (msg), SOUP_HEADER_COOKIE, cookie_header);
+		soup_message_headers_replace_common (soup_message_get_request_headers (msg), SOUP_HEADER_COOKIE, cookie_header, SOUP_HEADER_VALUE_TRUSTED);
 		g_free (cookie_header);
 		g_slist_free_full (cookies, (GDestroyNotify)soup_cookie_free);
 	} else {
@@ -885,6 +968,8 @@ soup_cookie_jar_session_feature_init (SoupSessionFeatureInterface *feature_inter
  *
  * The cookies in the list are a copy of the original, so
  * you have to free them when you are done with them.
+ *
+ * For historical reasons this list is in reverse order.
  *
  * Returns: (transfer full) (element-type Soup.Cookie): a #GSList
  *   with all the cookies in the @jar.
@@ -986,7 +1071,7 @@ soup_cookie_jar_delete_cookie (SoupCookieJar *jar,
  *   from that page, reject any cookie that it could try to set unless it
  *   already has a cookie in the cookie jar. For libsoup to be able to tell
  *   apart first party cookies from the rest, the application must call
- *   [method@Message.set_first_party] on each outgoing #SoupMessage, setting the
+ *   [method@Message.set_first_party] on each outgoing [class@Message], setting the
  *   [struct@GLib.Uri] of the main document. If no first party is set in a
  *   message when this policy is in effect, cookies will be assumed to be third
  *   party by default.

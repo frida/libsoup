@@ -10,31 +10,38 @@
 #endif
 
 #include <glib/gi18n-lib.h>
-#include <gmodule.h>
 #include "gconstructor.h"
-
-#ifndef GLIB_STATIC_COMPILATION
 
 #ifdef G_OS_WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 HMODULE soup_dll;
+#elif defined (HAVE_DLFCN_H)
+#include <dlfcn.h>
 #endif
 
 static gboolean
 soup2_is_loaded (void)
 {
-    GModule *module = g_module_open (NULL, 0);
-    gpointer func;
-    gboolean result = FALSE;
+	gboolean result = FALSE;
 
-    if (g_module_symbol (module, "soup_uri_new", &func))
-        result = TRUE;
+	/* Skip on PE/COFF, as it doesn't have a flat symbol namespace,
+	 * and on platforms without dlopen() support (e.g. static-only
+	 * toolchains).
+	 */
+#if !defined (G_OS_WIN32) && defined (HAVE_DLFCN_H)
+	gpointer handle;
+	gpointer func;
 
-    g_module_close (module);
-
-    return result;
+	handle = dlopen (NULL, RTLD_LAZY | RTLD_GLOBAL);
+	if (handle != NULL) {
+		func = dlsym (handle, "soup_uri_new");
+		result = (func != NULL);
+		dlclose (handle);
+	}
+#endif
+	return result;
 }
 
 static void
@@ -100,6 +107,4 @@ soup_init_ctor (void)
 
 #else
 # error Your platform/compiler is missing constructor support
-#endif
-
 #endif

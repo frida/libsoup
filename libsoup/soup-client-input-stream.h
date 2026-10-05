@@ -5,7 +5,6 @@
 
 #pragma once
 
-#include "soup-message.h"
 #include "soup-types.h"
 #include "soup-filter-input-stream.h"
 

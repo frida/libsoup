@@ -6,6 +6,7 @@
 #include "test-utils.h"
 #include "soup-message-private.h"
 #include "soup-uri-utils-private.h"
+#include "soup-server-private.h"
 #include "soup-misc.h"
 
 #include <gio/gnetworking.h>
@@ -254,7 +255,7 @@ do_invalid_percent_encoding_paths_test (ServerData *sd, gconstpointer test_data)
 	SoupMessage *msg;
 	GUri *uri;
 
-	g_test_bug ("262");
+	g_test_bug ("https://gitlab.gnome.org/GNOME/libsoup/-/issues/262");
 
 	session = soup_test_session_new (NULL);
 
@@ -494,6 +495,188 @@ do_multi_family_test (ServerData *sd, gconstpointer test_data)
 	g_assert_cmpint (g_uri_get_port (uri1), ==, g_uri_get_port (uri2));
 
 	do_multi_test (sd, uri1, uri2);
+}
+
+static gboolean smuggle_auth_callback_hit;
+
+static void
+smuggle_target_callback (SoupServer        *server,
+			 SoupServerMessage *msg,
+			 const char        *path,
+			 GHashTable        *query,
+			 gpointer           data)
+{
+	/* The smuggled request must never be dispatched */
+	g_assert_not_reached ();
+}
+
+static gboolean
+smuggle_auth_callback (SoupAuthDomain    *domain,
+		       SoupServerMessage *msg,
+		       const char        *username,
+		       const char        *password,
+		       gpointer           user_data)
+{
+	smuggle_auth_callback_hit = TRUE;
+
+	/* Always reject, so the server sends a 401 before reading the body */
+	return FALSE;
+}
+
+/* The server builds the request URI from the Host header. A Host value that
+ * smuggles URI delimiters (here a percent-encoded "?" and "#") must be
+ * rejected rather than shifting the path or query. See issue #492.
+ */
+static void
+assert_host_header_status (GUri       *server_uri,
+			   const char *host,
+			   const char *expected_status)
+{
+	GSocketClient *client;
+	GSocketConnection *conn;
+	GInputStream *istream;
+	GOutputStream *ostream;
+	GError *error = NULL;
+	char *request;
+	char buf[1024];
+	gssize n;
+
+	client = g_socket_client_new ();
+	conn = g_socket_client_connect_to_host (client, "127.0.0.1", g_uri_get_port (server_uri), NULL, &error);
+	g_assert_no_error (error);
+	g_socket_set_timeout (g_socket_connection_get_socket (conn), 5);
+	istream = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+	ostream = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+
+	request = g_strdup_printf ("GET /path HTTP/1.1\r\n"
+				   "Host: %s\r\n"
+				   "\r\n", host);
+	g_output_stream_write_all (ostream, request, strlen (request), NULL, NULL, &error);
+	g_assert_no_error (error);
+
+	n = g_input_stream_read (istream, buf, sizeof (buf) - 1, NULL, &error);
+	g_assert_no_error (error);
+	g_assert_cmpint (n, >, 0);
+	buf[n] = '\0';
+	soup_test_assert (strstr (buf, expected_status) != NULL,
+			  "Host: %s -> expected %s, got: %.*s",
+			  host, expected_status, (int)strcspn (buf, "\r\n"), buf);
+
+	g_free (request);
+	g_io_stream_close (G_IO_STREAM (conn), NULL, NULL);
+	g_object_unref (conn);
+	g_object_unref (client);
+}
+
+static void
+do_bad_host_header_test (void)
+{
+	SoupServer *server;
+	GUri *uri;
+
+	server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
+	soup_server_add_handler (server, NULL, server_callback, NULL, NULL);
+	uri = soup_test_server_get_uri (server, "http", "127.0.0.1");
+
+	assert_host_header_status (uri, "localhost:80%3fkey=value%23", " 400 ");
+	/* Everything before "@" parses as userinfo, so the real host becomes
+	 * whatever follows it.
+	 */
+	assert_host_header_status (uri, "localhost@internal.test", " 400 ");
+	assert_host_header_status (uri, "user:pass@internal.test", " 400 ");
+	assert_host_header_status (uri, "localhost", " 200 ");
+
+	g_uri_unref (uri);
+	soup_test_server_quit_unref (server);
+}
+
+/* A client that requests "Expect: 100-continue" may still send its body
+ * without waiting. If the server produces an early final response (here a 401
+ * from an auth domain) without draining that body, the leftover bytes must not
+ * be parsed as the next request on a kept-alive connection. See issue #539.
+ */
+static void
+do_early_response_expect_continue_test (void)
+{
+	SoupServer *server;
+	SoupAuthDomain *auth_domain;
+	GUri *uri;
+	GSocketClient *client;
+	GSocketConnection *conn;
+	GInputStream *istream;
+	GOutputStream *ostream;
+	GError *error = NULL;
+	char *request;
+	const char *smuggled = "GET /smuggled HTTP/1.1\r\nHost: localhost\r\n\r\n";
+	char buf[4096];
+	gsize total = 0;
+	gssize n;
+
+	smuggle_auth_callback_hit = FALSE;
+
+	server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
+	soup_server_add_handler (server, "/smuggled", smuggle_target_callback, NULL, NULL);
+	auth_domain = soup_auth_domain_basic_new ("realm", "smuggle-test",
+						  "auth-callback", smuggle_auth_callback,
+						  NULL);
+	soup_auth_domain_add_path (auth_domain, "/protected");
+	soup_server_add_auth_domain (server, auth_domain);
+	g_object_unref (auth_domain);
+
+	uri = soup_test_server_get_uri (server, "http", "127.0.0.1");
+
+	client = g_socket_client_new ();
+	conn = g_socket_client_connect_to_host (client, "127.0.0.1", g_uri_get_port (uri), NULL, &error);
+	g_assert_no_error (error);
+	/* Bound the read so the buggy behaviour (connection kept open) fails
+	 * quickly rather than hanging.
+	 */
+	g_socket_set_timeout (g_socket_connection_get_socket (conn), 5);
+	istream = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+	ostream = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+
+	/* Send credentials so the auth domain reaches smuggle_auth_callback
+	 * and rejects there, rather than refusing for lack of a header.
+	 */
+	request = g_strdup_printf ("POST /protected HTTP/1.1\r\n"
+				   "Host: localhost\r\n"
+				   "Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n"
+				   "Content-Length: %zu\r\n"
+				   "Expect: 100-continue\r\n"
+				   "\r\n"
+				   "%s",
+				   strlen (smuggled), smuggled);
+	g_output_stream_write_all (ostream, request, strlen (request), NULL, NULL, &error);
+	g_assert_no_error (error);
+
+	/* Read until the server closes the connection. A conformant server
+	 * sends a single 401 and closes; the smuggled request is never run.
+	 */
+	while ((n = g_input_stream_read (istream, buf + total,
+					 sizeof (buf) - 1 - total, NULL, &error)) > 0) {
+		total += n;
+		if (total >= sizeof (buf) - 1)
+			break;
+	}
+	buf[total] = '\0';
+
+	g_assert_true (smuggle_auth_callback_hit);
+	g_assert_nonnull (strstr (buf, " 401 "));
+	/* The server must not have produced a second response for the
+	 * smuggled request.
+	 */
+	g_assert_null (strstr (buf, " 200 "));
+	/* The connection must have been closed cleanly (EOF), not left open */
+	g_assert_no_error (error);
+	g_assert_cmpint (n, ==, 0);
+	g_clear_error (&error);
+
+	g_free (request);
+	g_io_stream_close (G_IO_STREAM (conn), NULL, NULL);
+	g_object_unref (conn);
+	g_object_unref (client);
+	g_uri_unref (uri);
+	soup_test_server_quit_unref (server);
 }
 
 static void
@@ -1315,6 +1498,191 @@ do_steal_connect_test (ServerData *sd, gconstpointer test_data)
 	g_free (proxy_uri_str);
 }
 
+static void
+do_idle_connection_closed_test (ServerData *sd, gconstpointer test_data)
+{
+        SoupSession *session;
+        SoupMessage *msg;
+        GBytes *body;
+        GError *error = NULL;
+        GSList *clients;
+
+        soup_server_set_http2_enabled (sd->server, tls_available);
+
+        session = soup_test_session_new (NULL);
+
+        msg = soup_message_new_from_uri ("GET", sd->base_uri);
+        body = soup_session_send_and_read (session, msg, NULL, &error);
+        g_assert_no_error (error);
+        g_bytes_unref (body);
+        g_object_unref (msg);
+
+        clients = soup_server_get_clients (sd->server);
+        g_assert_cmpuint (g_slist_length (clients), ==, 1);
+
+        if (tls_available) {
+                msg = soup_message_new_from_uri ("GET", sd->ssl_base_uri);
+                body = soup_session_send_and_read (session, msg, NULL, &error);
+                g_assert_no_error (error);
+                g_bytes_unref (body);
+                g_object_unref (msg);
+
+                clients = soup_server_get_clients (sd->server);
+                g_assert_cmpuint (g_slist_length (clients), ==, 2);
+        }
+
+        soup_test_session_abort_unref (session);
+
+        while (soup_server_get_clients (sd->server))
+                g_main_context_iteration (NULL, FALSE);
+}
+
+static void
+server_chunked_hundler (SoupServer        *server,
+                        SoupServerMessage *msg,
+                        const char        *path,
+                        GHashTable        *query,
+                        gpointer           data)
+{
+        g_assert_true (soup_server_message_get_method (msg) == SOUP_METHOD_POST);
+        g_assert_cmpstr (path, ==, "/valid");
+
+        soup_server_message_set_status (msg, SOUP_STATUS_OK, NULL);
+        soup_server_message_set_response (msg, "text/plain", SOUP_MEMORY_STATIC, "index", 5);
+}
+
+#define CHUNKED_FORMAT_REQUEST "POST /valid HTTP/1.1\r\nHost: 127.0.0.1\r\n%sGET /invalid HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+
+static void
+do_chunked_test (ServerData *sd, gconstpointer test_data)
+{
+        gint i;
+        struct {
+                const char *description;
+                const char *test;
+                const char *expected_response;
+        } tests[] = {
+                { "Single LF", "Transfer-Encoding: chunked\r\n\r\n5;ext\n data\r\n0\r\n\r\n", "HTTP/1.1 400 Bad Request" },
+                { "Content-Length and Transfer-Encoding", "Content-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n", "HTTP/1.1 200 OK" },
+                { "Content-Length and Transfer-Encoding with keep alive connection", "Content-Length: 4\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n0\r\n\r\n", "HTTP/1.1 200 OK" },
+                { "Request Entity Too Large", "Transfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n8000000000000001\r\n\r\n\r\n", "HTTP/1.1 413 Request Entity Too Large" },
+                { "Leading whitespace in chunk-size", "Transfer-Encoding: chunked\r\n\r\n 5\r\nhello\r\n0\r\n\r\n", "HTTP/1.1 400 Bad Request" },
+                { "Plus-prefixed chunk-size", "Transfer-Encoding: chunked\r\n\r\n+5\r\nhello\r\n0\r\n\r\n", "HTTP/1.1 400 Bad Request" },
+        };
+
+        sd->server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
+        sd->base_uri = soup_test_server_get_uri (sd->server, "http", NULL);
+        server_add_handler (sd, NULL, server_chunked_hundler, NULL, NULL);
+
+        for (i = 0; i < G_N_ELEMENTS (tests); i++) {
+                GSocketClient *client;
+                GSocketConnection *conn;
+                GInputStream *input;
+                GOutputStream *output;
+                char *request;
+                char buffer[4096];
+                gssize nread;
+                GString *response;
+                const char *boundary;
+                GError *error = NULL;
+
+                debug_printf (1, "  %s\n", tests[i].description);
+
+                client = g_socket_client_new ();
+                conn = g_socket_client_connect_to_host (client, g_uri_get_host (sd->base_uri), g_uri_get_port (sd->base_uri), NULL, &error);
+                g_assert_no_error (error);
+
+                request = g_strdup_printf (CHUNKED_FORMAT_REQUEST, tests[i].test);
+
+                output = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+                g_output_stream_write_all (output, request, strlen (request), NULL, NULL, NULL);
+                g_output_stream_close (output, NULL, NULL);
+                g_socket_shutdown (g_socket_connection_get_socket (G_SOCKET_CONNECTION (conn)), FALSE, TRUE, &error);
+
+                response = g_string_new (NULL);
+
+                input = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+                do {
+                        nread = g_input_stream_read (input, buffer, sizeof(buffer), NULL, &error);
+                        g_assert_no_error (error);
+                        if (nread >= 0)
+                                response = g_string_append_len (response, (const char *)buffer, nread);
+                } while (nread > 0);
+
+                boundary = strstr (response->str, "\r\n");
+                g_assert_nonnull (boundary);
+                response = g_string_truncate (response, response->len - strlen (boundary));
+                g_assert_cmpstr (response->str, ==, tests[i].expected_response);
+                g_string_free (response, TRUE);
+
+                g_free (request);
+                g_object_unref (conn);
+                g_object_unref (client);
+        }
+}
+
+static void
+do_multiple_content_length_test (ServerData *sd, gconstpointer test_data)
+{
+        gint i;
+        struct {
+                const char *description;
+                const char *test;
+                const char *expected_response;
+        } tests[] = {
+                { "Double Content-Length with different value", "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\r\nABCD", "HTTP/1.0 400 Bad Request" },
+                { "Double Content-Length with the same value", "POST / HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 4\r\nContent-Length: 4\r\nConnection: close\r\n\r\n\r\nABCD", "HTTP/1.1 200 OK" },
+        };
+
+        sd->server = soup_test_server_new (SOUP_TEST_SERVER_IN_THREAD);
+        sd->base_uri = soup_test_server_get_uri (sd->server, "http", NULL);
+        server_add_handler (sd, NULL, server_callback, NULL, NULL);
+
+        for (i = 0; i < G_N_ELEMENTS (tests); i++) {
+                GSocketClient *client;
+                GSocketConnection *conn;
+                GInputStream *input;
+                GOutputStream *output;
+                gsize nwritten;
+                char buffer[4096];
+                gssize nread;
+                GString *response;
+                const char *boundary;
+                GError *error = NULL;
+
+                debug_printf (1, "  %s\n", tests[i].description);
+
+                client = g_socket_client_new ();
+                conn = g_socket_client_connect_to_host (client, g_uri_get_host (sd->base_uri), g_uri_get_port (sd->base_uri), NULL, &error);
+                g_assert_no_error (error);
+
+                output = g_io_stream_get_output_stream (G_IO_STREAM (conn));
+                g_output_stream_write_all (output, tests[i].test, strlen (tests[i].test), &nwritten, NULL, &error);
+                g_assert_no_error (error);
+                g_assert_cmpuint (nwritten, ==, strlen (tests[i].test));
+                g_output_stream_flush (output, NULL, &error);
+                g_assert_no_error (error);
+
+                response = g_string_new (NULL);
+
+                input = g_io_stream_get_input_stream (G_IO_STREAM (conn));
+                do {
+                        nread = g_input_stream_read (input, buffer, sizeof(buffer), NULL, NULL);
+                        if (nread >= 0)
+                                response = g_string_append_len (response, (const char *)buffer, nread);
+                } while (nread > 0);
+
+                boundary = strstr (response->str, "\r\n");
+                g_assert_nonnull (boundary);
+                response = g_string_truncate (response, response->len - strlen (boundary));
+                g_assert_cmpstr (response->str, ==, tests[i].expected_response);
+                g_string_free (response, TRUE);
+
+                g_object_unref (conn);
+                g_object_unref (client);
+        }
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1330,12 +1698,16 @@ main (int argc, char **argv)
 		    server_setup, do_invalid_percent_encoding_paths_test, server_teardown);
 	g_test_add ("/server/ipv6", ServerData, NULL,
 		    NULL, do_ipv6_test, server_teardown);
+        g_test_add ("/server/idle-connection-closed", ServerData, NULL,
+                    server_setup, do_idle_connection_closed_test, server_teardown);
 	g_test_add ("/server/multi/port", ServerData, NULL,
 		    NULL, do_multi_port_test, server_teardown);
 	g_test_add ("/server/multi/scheme", ServerData, NULL,
 		    NULL, do_multi_scheme_test, server_teardown);
 	g_test_add ("/server/multi/family", ServerData, NULL,
 		    NULL, do_multi_family_test, server_teardown);
+	g_test_add_func ("/server/early-response-expect-continue", do_early_response_expect_continue_test);
+	g_test_add_func ("/server/bad-host-header", do_bad_host_header_test);
 	g_test_add_func ("/server/import/gsocket", do_gsocket_import_test);
 	g_test_add_func ("/server/import/fd", do_fd_import_test);
 	g_test_add_func ("/server/accept/iostream", do_iostream_accept_test);
@@ -1353,6 +1725,10 @@ main (int argc, char **argv)
 		    server_setup_nohandler, do_early_multi_test, server_teardown);
 	g_test_add ("/server/steal/CONNECT", ServerData, NULL,
 		    server_setup, do_steal_connect_test, server_teardown);
+        g_test_add ("/server/chunked", ServerData, NULL,
+                    NULL, do_chunked_test, server_teardown);
+        g_test_add ("/server/multiple-content-length", ServerData, NULL,
+                    NULL, do_multiple_content_length_test, server_teardown);
 
 	ret = g_test_run ();
 

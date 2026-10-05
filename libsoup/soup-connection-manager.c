@@ -33,27 +33,31 @@ struct _SoupConnectionManager {
 
 typedef struct {
         GUri *uri;
+        GMutex *mutex;
         GHashTable *owner_map;
         GNetworkAddress *addr;
 
         GList *conns;
         guint  num_conns;
 
+        GMainContext *context;
         GSource *keep_alive_src;
-        SoupConnectionManager *conn_manager;
 } SoupHost;
 
-#define HOST_KEEP_ALIVE 5 * 60 * 1000 /* 5 min in msecs */
+#define HOST_KEEP_ALIVE (5 * 60 * 1000) /* 5 min in msecs */
 
 static SoupHost *
-soup_host_new (GUri       *uri,
-               GHashTable *owner_map)
+soup_host_new (GUri         *uri,
+               GHashTable   *owner_map,
+               GMutex       *mutex,
+               GMainContext *context)
 {
         SoupHost *host;
         const char *scheme = g_uri_get_scheme (uri);
 
         host = g_new0 (SoupHost, 1);
         host->owner_map = owner_map;
+        host->mutex = mutex;
         if (g_strcmp0 (scheme, "http") != 0 && g_strcmp0 (scheme, "https") != 0) {
                 host->uri = soup_uri_copy (uri,
                                            SOUP_URI_SCHEME, soup_uri_is_https (uri) ? "https" : "http",
@@ -66,6 +70,8 @@ soup_host_new (GUri       *uri,
                                    "port", g_uri_get_port (host->uri),
                                    "scheme", g_uri_get_scheme (host->uri),
                                    NULL);
+
+        host->context = context;
 
         g_hash_table_insert (host->owner_map, host->uri, host);
 
@@ -123,14 +129,20 @@ static gboolean
 free_unused_host (gpointer user_data)
 {
         SoupHost *host = (SoupHost *)user_data;
+        GMutex *mutex = host->mutex;
 
-        if (host->conns)
-                return FALSE;
+        g_mutex_lock (mutex);
 
-        /* This will free the host in addition to removing it from the hash table */
-        g_hash_table_remove (host->owner_map, host->uri);
+        g_clear_pointer (&host->keep_alive_src, g_source_unref);
 
-        return FALSE;
+        if (!host->conns) {
+                /* This will free the host in addition to removing it from the hash table */
+                g_hash_table_remove (host->owner_map, host->uri);
+        }
+
+        g_mutex_unlock (mutex);
+
+        return G_SOURCE_REMOVE;
 }
 
 static void
@@ -142,8 +154,7 @@ soup_host_add_connection (SoupHost       *host,
 
         if (host->keep_alive_src) {
                 g_source_destroy (host->keep_alive_src);
-                g_source_unref (host->keep_alive_src);
-                host->keep_alive_src = NULL;
+                g_clear_pointer (&host->keep_alive_src, g_source_unref);
         }
 }
 
@@ -160,7 +171,7 @@ soup_host_remove_connection (SoupHost       *host,
          */
         if (host->num_conns == 0) {
                 g_assert (host->keep_alive_src == NULL);
-                host->keep_alive_src = soup_add_timeout (g_main_context_get_thread_default (),
+                host->keep_alive_src = soup_add_timeout (host->context,
                                                          HOST_KEEP_ALIVE,
                                                          free_unused_host,
                                                          host);
@@ -172,15 +183,46 @@ soup_connection_manager_get_host_for_message (SoupConnectionManager *manager,
                                               SoupMessage           *msg)
 {
         GUri *uri = soup_message_get_uri (msg);
-        SoupHost *host;
         GHashTable *map;
+
+        map = soup_uri_is_https (uri) ?  manager->https_hosts : manager->http_hosts;
+        return g_hash_table_lookup (map, uri);
+}
+
+static SoupHost *
+soup_connection_manager_get_or_create_host_for_item (SoupConnectionManager *manager,
+                                                     SoupMessageQueueItem  *item)
+{
+        GUri *uri = soup_message_get_uri (item->msg);
+        GHashTable *map;
+        SoupHost *host;
 
         map = soup_uri_is_https (uri) ?  manager->https_hosts : manager->http_hosts;
         host = g_hash_table_lookup (map, uri);
         if (!host)
-                host = soup_host_new (uri, map);
+                host = soup_host_new (uri, map, &manager->mutex, soup_session_get_context (item->session));
 
         return host;
+}
+
+static void
+soup_connection_manager_drop_connection (SoupConnectionManager *manager,
+                                         SoupConnection        *conn)
+{
+        g_signal_handlers_disconnect_by_data (conn, manager);
+        manager->num_conns--;
+        g_object_unref (conn);
+
+        g_cond_broadcast (&manager->cond);
+}
+
+static void
+remove_connection (gpointer key,
+                   gpointer value,
+                   gpointer user_data)
+{
+        SoupConnectionManager *manager = user_data;
+        soup_connection_manager_drop_connection (manager, key);
 }
 
 SoupConnectionManager *
@@ -212,6 +254,9 @@ soup_connection_manager_new (SoupSession *session,
 void
 soup_connection_manager_free (SoupConnectionManager *manager)
 {
+        g_hash_table_foreach (manager->conns, remove_connection, manager);
+        g_assert (manager->num_conns == 0);
+
         g_clear_object (&manager->remote_connectable);
         g_hash_table_destroy (manager->http_hosts);
         g_hash_table_destroy (manager->https_hosts);
@@ -268,17 +313,6 @@ guint
 soup_connection_manager_get_num_conns (SoupConnectionManager *manager)
 {
         return manager->num_conns;
-}
-
-static void
-soup_connection_manager_drop_connection (SoupConnectionManager *manager,
-                                         SoupConnection        *conn)
-{
-        g_signal_handlers_disconnect_by_data (conn, manager);
-        manager->num_conns--;
-        g_object_unref (conn);
-
-        g_cond_broadcast (&manager->cond);
 }
 
 static void
@@ -355,6 +389,7 @@ static SoupConnection *
 soup_connection_manager_get_connection_locked (SoupConnectionManager *manager,
                                                SoupMessageQueueItem  *item)
 {
+        static int env_force_http1 = -1;
         SoupMessage *msg = item->msg;
         gboolean need_new_connection;
         SoupConnection *conn;
@@ -365,15 +400,18 @@ soup_connection_manager_get_connection_locked (SoupConnectionManager *manager,
         GSocketConnectable *remote_connectable;
         gboolean try_cleanup = TRUE;
 
+        if (env_force_http1 == -1)
+                env_force_http1 = g_getenv ("SOUP_FORCE_HTTP1") != NULL ? 1 : 0;
+
         need_new_connection =
                 (soup_message_query_flags (msg, SOUP_MESSAGE_NEW_CONNECTION)) ||
                 (soup_message_is_misdirected_retry (msg)) ||
                 (!soup_message_query_flags (msg, SOUP_MESSAGE_IDEMPOTENT) &&
                  !SOUP_METHOD_IS_IDEMPOTENT (soup_message_get_method (msg)));
 
-        host = soup_connection_manager_get_host_for_message (manager, msg);
+        host = soup_connection_manager_get_or_create_host_for_item (manager, item);
 
-        force_http_version = g_getenv ("SOUP_FORCE_HTTP1") ? SOUP_HTTP_1_1 : soup_message_get_force_http_version (msg);
+        force_http_version = env_force_http1 ? SOUP_HTTP_1_1 : soup_message_get_force_http_version (msg);
         while (TRUE) {
                 for (l = host->conns; l && l->data; l = g_list_next (l)) {
                         SoupHTTPVersion http_version;

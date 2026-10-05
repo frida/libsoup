@@ -51,10 +51,12 @@ static void
 do_copy_tests (void)
 {
         GUri *uri;
+        GUri *uri2;
         GUri *copy;
         char *str;
 
         uri = g_uri_parse ("http://127.0.0.1:1234/foo#bar", SOUP_HTTP_URI_FLAGS, NULL);
+        uri2 = g_uri_parse ("http://127.0.0.1", SOUP_HTTP_URI_FLAGS, NULL);
 
         /* Exact copy */
         copy = soup_uri_copy (uri, SOUP_URI_NONE);
@@ -91,6 +93,13 @@ do_copy_tests (void)
         g_free (str);
         g_uri_unref (copy);
 
+        /* Switch protocols without explicit port */
+        copy = soup_uri_copy (uri2, SOUP_URI_SCHEME, "https", SOUP_URI_NONE);
+        str = g_uri_to_string (copy);
+        g_assert_cmpstr (str, ==, "https://127.0.0.1/");
+        g_free (str);
+        g_uri_unref (copy);
+
         /* Update everything */
         copy = soup_uri_copy (uri,
                               SOUP_URI_SCHEME, "https",
@@ -114,6 +123,52 @@ do_copy_tests (void)
         g_uri_unref (copy);
 
         g_uri_unref (uri);
+        g_uri_unref (uri2);
+}
+
+static struct {
+        const char *scheme;
+        const char *host;
+        const char *as_string;
+        gboolean valid;
+} valid_tests[] = {
+        { "http", "example.com", "http://example.com/", TRUE },
+        { "http", "localhost", "http://localhost/", TRUE },
+        { "http", "127.0.0.1", "http://127.0.0.1/", TRUE },
+        { "http", "::1", "http://[::1]/", TRUE },
+        { "http", "::192.168.0.10", "http://[::192.168.0.10]/", TRUE },
+        { "http", "FEDC:BA98:7654:3210:FEDC:BA98:7654:3210", "http://[FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]/", TRUE },
+        { "http", "\xe4\xbe\x8b\xe5\xad\x90.\xe6\xb5\x8b\xe8\xaf\x95", "http://\xe4\xbe\x8b\xe5\xad\x90.\xe6\xb5\x8b\xe8\xaf\x95/", TRUE },
+        { "http", "012x:4567:89AB:cdef:3210:7654:ba98:FeDc", "http://012x:4567:89AB:cdef:3210:7654:ba98:FeDc/", FALSE },
+        { "http", "\texample.com", "http://\texample.com/", FALSE },
+        { "http", "example.com\n", "http://example.com\n/", FALSE },
+        { "http", "\r\nexample.com", "http://\r\nexample.com/", FALSE },
+        { "http", "example .com", "http://example .com/", FALSE },
+        { "http", "example:com", "http://example:com/", FALSE },
+        { "http", "exampl<e>.com", "http://exampl<e>.com/", FALSE },
+        { "http", "exampl[e].com", "http://exampl[e].com/", FALSE },
+        { "http", "exampl^e.com", "http://exampl^e.com/", FALSE },
+        { "http", "examp|e.com", "http://examp|e.com/", FALSE },
+};
+
+static void
+do_valid_tests (void)
+{
+        int i;
+
+        for (i = 0; i < G_N_ELEMENTS (valid_tests); ++i) {
+                GUri *uri;
+                char *uri_str;
+
+                uri = g_uri_build (SOUP_HTTP_URI_FLAGS | G_URI_FLAGS_ENCODED, valid_tests[i].scheme, NULL, valid_tests[i].host, -1, "", NULL, NULL);
+                uri_str = g_uri_to_string (uri);
+
+                g_assert_cmpstr (uri_str, ==, valid_tests[i].as_string);
+                g_assert_true (soup_uri_is_valid (uri) == valid_tests[i].valid);
+
+                g_free (uri_str);
+                g_uri_unref (uri);
+        }
 }
 
 #define CONTENT_TYPE_DEFAULT "text/plain;charset=US-ASCII"
@@ -129,8 +184,13 @@ static struct {
         { "data:text/plain,hello", "hello", "text/plain" },
         { "data:text/plain;charset=UTF-8,hello", "hello", "text/plain;charset=UTF-8" },
         { "data:text/plain;base64,aGVsbG8=", "hello", "text/plain" },
-        { "data:text/plain;base64,invalid=", "", "text/plain" },
+        { "data:text/plain;base64,invalid=", "\x8a\x7b\xda\x96\x27", "text/plain" },
         { "data:,", "", CONTENT_TYPE_DEFAULT },
+        { "data:.///", "/.//", CONTENT_TYPE_DEFAULT },
+        { "data:/.//", "/.//", CONTENT_TYPE_DEFAULT },
+        /* Embedded NUL bytes in base64 data must not be treated as the end of the input */
+        { "data:;base64,%00%00%00", "", CONTENT_TYPE_DEFAULT },
+        { "data:;base64,aGVs%00bG8=", "hello", CONTENT_TYPE_DEFAULT },
 };
 
 static void
@@ -150,6 +210,8 @@ do_data_uri_tests (void)
 
                 g_assert_nonnull (output);
                 g_assert_cmpstr (content_type, ==, data_uri_tests[i].content_type);
+                g_assert_cmpmem (g_bytes_get_data (output, NULL), g_bytes_get_size (output),
+                                 data_uri_tests[i].output, strlen (data_uri_tests[i].output));
 
 		g_free (content_type);
 		g_bytes_unref (output);
@@ -192,6 +254,7 @@ main (int argc, char **argv)
 
 	g_test_add_func ("/uri/equality", do_equality_tests);
 	g_test_add_func ("/uri/copy", do_copy_tests);
+        g_test_add_func ("/uri/valid", do_valid_tests);
         g_test_add_func ("/data", do_data_uri_tests);
         g_test_add_func ("/path_and_query", do_path_and_query_tests);
 
